@@ -26,5 +26,17 @@ def test_global_transcript_ring():
 def test_system_prompt_with_awareness():
     cm = ContextManager(max_partner_lines=2)
     cm.record_turn("lilith", "你刚才讲的故事不错")
-    prompt = cm.build_system_prompt("yuki", partner_lines="你的搭档Lilith刚才说：...")
-    assert "你的搭档Lilith" in prompt
+    prompt = cm.build_system_prompt("yuki", base_prompt="你是Yuki")
+    assert "【感知彼此】" in prompt
+    assert "你刚才讲的故事不错" in prompt
+
+
+def test_partner_lines_filters_self():
+    cm = ContextManager(max_partner_lines=10)
+    cm.record_turn("yuki", "今天天气不错")
+    cm.record_turn("lilith", "是呀，适合出门")
+    cm.record_turn("yuki", "那我们走吧")
+    lines = cm.partner_lines("yuki")
+    assert lines
+    assert all(not ln.startswith("yuki:") for ln in lines)
+    assert "是呀，适合出门" in "\n".join(lines)

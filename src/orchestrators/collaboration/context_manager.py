@@ -21,12 +21,12 @@ class ContextManager:
                 self._transcript = self._transcript[-self._max_transcript:]
 
     def global_transcript(self, limit: int = 0) -> List[str]:
-        n = limit or self._max_transcript
+        n = limit if limit > 0 else self._max_transcript
         return list(self._transcript[-n:])
 
     def partner_lines(self, speaker: str, limit: int = 0) -> List[str]:
         """对方最近发言（感知彼此数据源）。"""
-        n = limit or self._max_partner_lines
+        n = limit if limit > 0 else self._max_partner_lines
         partner = [ln for ln in self._transcript
                    if not ln.startswith(speaker + ":")]
         return partner[-n:]
@@ -37,8 +37,6 @@ class ContextManager:
         prompt = base_prompt
         if awareness_enabled:
             lines = partner_lines if partner_lines is not None else self.partner_lines(role)
-            if isinstance(lines, str):
-                lines = [lines]          # 兼容单条字符串入参
             if lines:
                 prompt += "\n\n【感知彼此】对方最近发言：\n" + "\n".join(lines)
         return prompt.strip()

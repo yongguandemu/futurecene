@@ -17,7 +17,7 @@ v1.1 微调（相对旧项目 core/event_bus.py）：
 2. 新增 publish_sync()：显式等待所有订阅者完成的同步发布（默认异步走 publish_async）。
 
 # 模块内容清单（8 项契约）
-1. 模块身份标识：shared · EventBus · 对外接口 subscribe()/unsubscribe()/publish()/publish_async()/publish_sync()/get_history()/reset()
+1. 模块身份标识：shared · EventBus · 对外接口 subscribe()/unsubscribe()/publish()/publish_async()/publish_sync()/get_history()/current_seq()/reset()
 2. 配置契约：构造参数 schema/enable_history/history_size；熔断阈值 fuse_threshold=30、冷却 fuse_cooldown=5.0
 3. 输入契约：subscribe(event, handler, priority, name, once)；publish(event, **data) 事件名+关键字数据
 4. 输出契约：publish 同步执行匹配处理器；publish_async 新线程异步；get_subscriber_count()/get_history()/get_latest() 查询
@@ -68,6 +68,7 @@ class EventRecord:
     data: Dict
     handler_count: int
     timestamp: float = 0.0
+    seq: int = 0  # 全局单调序号（v1.2 新增）
     handler_results: List[str] = field(default_factory=list)
 
     def __post_init__(self):
@@ -103,6 +104,7 @@ class EventBus:
         self._fuse_threshold = 30
         self._fuse_cooldown = 5.0
         self._fuse_banned: Dict[str, float] = {}
+        self._seq_counter = 0  # 全局单调序号（v1.2 新增）
         self._initialized = True
         logger.info("[EventBus] 已初始化 (history_size=%d, fuse_threshold=%d)",
                     history_size, self._fuse_threshold)
@@ -164,9 +166,16 @@ class EventBus:
             return
         handlers = self._resolve_handlers(event)
         if not handlers:
+            # 无订阅者也要分配 seq（保持全局单调，供快照 version 使用）
+            with self._mutex:
+                self._seq_counter += 1
             return
         self._track_fuse(event)
-        record = EventRecord(event=event, data=data, handler_count=len(handlers))
+        with self._mutex:
+            self._seq_counter += 1
+            record = EventRecord(event=event, data=data,
+                                 handler_count=len(handlers),
+                                 seq=self._seq_counter)
         for handler in handlers:
             try:
                 handler.callback(event=event, **data)
@@ -221,6 +230,11 @@ class EventBus:
                     return r
             return None
         return self._history[-1]
+
+    def current_seq(self) -> int:
+        """当前全局事件序号（快照 version 读取用）。"""
+        with self._mutex:
+            return self._seq_counter
 
     def clear_history(self):
         with self._mutex:

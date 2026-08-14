@@ -65,3 +65,24 @@ def test_unsubscribe(clean_bus):
     clean_bus.subscribe(COMMAND_RECEIVED, handler)
     clean_bus.unsubscribe(COMMAND_RECEIVED, handler)
     assert clean_bus.get_subscriber_count(COMMAND_RECEIVED)[COMMAND_RECEIVED] == 0
+
+
+def test_seq_monotonic():
+    bus = EventBus()
+    bus.reset()
+    bus.subscribe("session:switched", lambda **kw: None)
+    bus.subscribe("llm:requested", lambda **kw: None)
+    bus.publish("session:switched", role="yuki")
+    bus.publish("llm:requested", text="hi")
+    history = bus.get_history(limit=10)
+    seqs = [r.seq for r in history if r.seq]
+    assert len(seqs) == 2
+    assert seqs[0] < seqs[1]
+    assert bus.current_seq() == seqs[1]
+
+
+def test_seq_assigned_without_subscribers():
+    bus = EventBus()
+    bus.reset()
+    bus.publish("session:switched", role="yuki")
+    assert bus.current_seq() >= 1

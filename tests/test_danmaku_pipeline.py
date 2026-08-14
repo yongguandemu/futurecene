@@ -120,3 +120,46 @@ def test_stop_unsubscribes():
     pipe.stop()
     _publish_danmaku(bus)
     assert llm.calls == []
+
+
+def test_execute_with_uses_role_and_publishes_completed():
+    """Task 15：execute_with 参数化入口按指定角色执行，字幕/LLM 带 role，
+    显式 system_prompt 优先（不叠加 profile_loader 注入），链路末尾发布 speech:completed(role)。"""
+    import asyncio
+
+    class FakeLLM:
+        def __init__(self):
+            self.calls = []
+
+        async def handle(self, cmd):
+            self.calls.append(cmd)
+            return {"ok": True, "data": {"reply": "回复内容"}}
+
+    class FakeTTS:
+        async def handle(self, cmd):
+            return {"ok": True, "data": {"audio_id": "a1"}}
+
+    class FakeSafety:
+        async def handle(self, cmd):
+            return {"ok": True, "data": {"verdict": "allow"}}
+
+    bus = EventBus()
+    llm = FakeLLM()
+    pipe = DanmakuPipeline(bus, llm_orchestrator=llm,
+                           tts_orchestrator=FakeTTS(),
+                           safety_orchestrator=FakeSafety())
+    events = []
+    # EventBus 订阅回调签名：event 名以 event= 关键字传入，归一化为 type 便于断言
+    bus.subscribe("speech:completed",
+                  lambda event, **kw: events.append({"type": event, **kw}))
+    bus.subscribe("frontend:subtitle_update",
+                  lambda event, **kw: events.append({"type": event, **kw}))
+    asyncio.run(pipe.execute_with("你好", role="lilith",
+                                  system_prompt="你是Lilith", turn_context=[]))
+    assert events and events[0]["type"] == "frontend:subtitle_update"
+    assert events[0]["role"] == "lilith"
+    assert events[-1]["type"] == "speech:completed"
+    assert events[-1]["role"] == "lilith"
+    # 显式 system_prompt 优先：LLM payload 用传入值（不叠加 profile_loader 注入）
+    assert llm.calls and llm.calls[0]["payload"]["role"] == "lilith"
+    assert llm.calls[0]["payload"]["system_prompt"] == "你是Lilith"

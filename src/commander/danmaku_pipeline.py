@@ -31,6 +31,7 @@ from src.shared.decision_log import (
     OUTCOME_BLOCKED, OUTCOME_ESCALATED, OUTCOME_NO_ACTION, record_decision,
 )
 from src.shared.events import (
+    ACTIVE_DIALOGUE,
     AUDIENCE_FILTERED,
     DANMAKU_RECEIVED,
     FRONTEND_SUBTITLE_UPDATE,
@@ -62,12 +63,14 @@ class DanmakuPipeline:
         if self._started:
             return
         self._event_bus.subscribe(DANMAKU_RECEIVED, self._on_danmaku)
+        self._event_bus.subscribe(ACTIVE_DIALOGUE, self._on_active_dialogue)
         self._started = True
-        logger.info("[DanmakuPipeline] 已订阅 danmaku:received（P1 全链路）")
+        logger.info("[DanmakuPipeline] 已订阅 danmaku:received / dialogue:active")
 
     def stop(self) -> None:
         if self._started:
             self._event_bus.unsubscribe(DANMAKU_RECEIVED, self._on_danmaku)
+            self._event_bus.unsubscribe(ACTIVE_DIALOGUE, self._on_active_dialogue)
             self._started = False
 
     async def execute_with(self, text: str, role: str, system_prompt: str = "",
@@ -141,6 +144,23 @@ class DanmakuPipeline:
                                           user_name=user_name))
         except Exception as e:
             logger.error("[DanmakuPipeline] 链路异常: %s", e)
+
+    def _on_active_dialogue(self, event: str, text: str = "", **kwargs) -> None:
+        """冷场主动发言：字幕 + TTS 合成（Live2D 口型由 audio_ready 驱动）。"""
+        text = (text or "").strip()
+        if not text:
+            return
+        try:
+            asyncio.run(self._speak_active(text))
+        except Exception as e:
+            logger.error("[DanmakuPipeline] 主动发言异常: %s", e)
+
+    async def _speak_active(self, text: str) -> None:
+        """主动发言：发布字幕事件 + TTS 合成（不经过安全过滤/LLM，直接说）。"""
+        role = self._current_role()
+        self._event_bus.publish(FRONTEND_SUBTITLE_UPDATE,
+                                text=text, role=role, source="active_dialogue")
+        await self._synthesize(text, role)
 
     # ---------- 全链路编排（规格书 9.2） ----------
 

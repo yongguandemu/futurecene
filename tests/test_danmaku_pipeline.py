@@ -160,6 +160,24 @@ def test_stop_unsubscribes():
     assert llm.calls == []
 
 
+def test_active_speaker_publishes_subtitle_and_tts():
+    """dialogue:active → 主动发言（字幕 + TTS 调用，直播测试台主动模式）。"""
+    from src.shared.events import ACTIVE_DIALOGUE
+    bus = EventBus()
+    bus.reset()
+    llm = FakeLLM(reply="主动说话内容")
+    tts = FakeTTS()
+    pipe = DanmakuPipeline(event_bus=bus, llm_orchestrator=llm,
+                           tts_orchestrator=tts)
+    seen = {}
+    bus.subscribe(FRONTEND_SUBTITLE_UPDATE, lambda event, **kw: seen.update(kw))
+    pipe.start()
+    bus.publish(ACTIVE_DIALOGUE, text="今天播点什么好呢",
+                mood="default", role="yuki", timestamp=0.0)
+    assert seen.get("text") == "今天播点什么好呢"
+    assert tts.calls and tts.calls[0]["capability"] in ("tts:synthesize", "tts:stream_synthesize")
+
+
 def test_execute_with_uses_role_and_publishes_completed():
     """Task 15：execute_with 参数化入口按指定角色执行，字幕/LLM 带 role，
     显式 system_prompt 优先（不叠加 profile_loader 注入），链路末尾发布 speech:completed(role)。"""

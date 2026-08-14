@@ -168,6 +168,29 @@ def build_app_context():
                                profile_loader=profile_loader)
     pipeline.start()
 
+    # ---------- 冷场主动对话（直播测试台 · 主动模式） ----------
+    # LLM 调度官内部持有 ActiveDialogue（构造时创建）；此处绑定 EventBus 并启动，
+    # 使冷场自发闲聊真正生效（此前仅 COLLAB_ENABLED 时注入角色生成器，引擎不启动）。
+    active_dialogue = getattr(llm_orch, "_active", None)
+    if active_dialogue is not None:
+        active_dialogue.set_event_bus(event_bus)
+        active_dialogue.start()
+        logger.info("[app] ActiveDialogue 主动对话已启动")
+
+    # ---------- Live2D 模型装载（直播测试台：使后端模型状态非空） ----------
+    # 此前 live2d:load 仅 demo_danmaku.py 调用，生产装配零调用导致后端
+    # _models 恒空、lip_sync_start 事件不发出；此处启动时装载当前角色模型。
+    live2d_orch = registry.get("live2d")
+    if live2d_orch is not None:
+        try:
+            import asyncio
+            load_result = asyncio.run(live2d_orch.handle(
+                {"capability": "live2d:load",
+                 "payload": {"role": session.role}}))
+            logger.info("[app] live2d:load 完成: %s", load_result)
+        except Exception as e:
+            logger.warning("[app] live2d:load 失败: %s", e)
+
     # ---------- 多角色协作（collaboration.enabled 开关，默认关） ----------
     # 开启条件：COLLAB_ENABLED=1（环境变量优先）或 config.yaml collaboration.enabled=true。
     # 装配 CollaborationCoordinator：订阅 danmaku/speech/completed 并驱动 pipeline.execute_with

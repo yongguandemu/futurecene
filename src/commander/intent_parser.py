@@ -8,7 +8,7 @@
 1. 模块身份标识：commander · IntentParser · 对外 parse()；输出 Command 数据类
 2. 配置契约：无独立配置；内置规则正则（切换角色/点歌/状态/系统命令）
 3. 输入契约：parse(text, source, session_id) 原始文本
-4. 输出契约：Command（capability/payload/source/session_id/raw）
+4. 输出契约：Command（capability/payload/source/session_id/raw/command_id）
 5. 依赖声明：re、dataclasses、typing
 6. 错误定义：空文本与未知意图默认 llm:chat；! 前缀未匹配归 system:command
 7. 生命周期方法：parse()（无状态）
@@ -33,6 +33,7 @@ class Command:
     source: str  # danmaku / command / voice / system
     session_id: str  # 会话 ID
     raw: str = ""  # 原始文本（审计/调试）
+    command_id: str = ""  # 命令追踪 ID（路由层生成，事件透传）
 
 
 class IntentParser:

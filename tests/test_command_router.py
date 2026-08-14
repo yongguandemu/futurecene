@@ -90,3 +90,40 @@ def test_handle_exception_publishes_failed():
     assert result["ok"] is False
     assert "boom" in result["error"]
     assert "boom" in events[0]
+
+
+def test_dispatch_publishes_command_id():
+    bus = EventBus()
+    bus.reset()
+    received = []
+    bus.subscribe("commander:command_received", lambda **kw: received.append(kw))
+    bus.subscribe("commander:command_completed", lambda **kw: received.append(kw))
+    orch = FakeOrchestrator("llm", ["llm:chat"])  # 既有测试中的 stub，capability="llm:chat"
+    sm = SwitchManager(bus)
+    reg = OrchestratorRegistry(sm, bus)
+    reg.register(orch)
+    router = CommandRouter(reg, sm, bus)
+    cmd = Command(capability="llm:chat", payload={}, source="command",
+                  session_id="default")
+    result = asyncio.run(router.dispatch(cmd))
+    assert result["ok"] is True
+    cids = [kw.get("command_id") for kw in received if kw.get("command_id")]
+    assert len(cids) == 2
+    assert cids[0] == cids[1]
+    assert len(cids[0]) == 32  # uuid4().hex
+
+
+def test_existing_command_id_preserved():
+    bus = EventBus()
+    bus.reset()
+    seen = {}
+    bus.subscribe("commander:command_completed", lambda **kw: seen.update(kw))
+    orch = FakeOrchestrator("llm", ["llm:chat"])
+    sm = SwitchManager(bus)
+    reg = OrchestratorRegistry(sm, bus)
+    reg.register(orch)
+    router = CommandRouter(reg, sm, bus)
+    cmd = Command(capability="llm:chat", payload={}, source="command",
+                  session_id="default", command_id="predefined-123")
+    asyncio.run(router.dispatch(cmd))
+    assert seen.get("command_id") == "predefined-123"

@@ -1,0 +1,36 @@
+# Lilith TTS 配置
+tts:
+  primary_engine: wusound
+  fallback_chain:
+    - wusound
+    - cosyvoice
+    - edge_tts
+
+  wusound:
+    voice_id: "a4dbb2a9-48cd-4853-85c5-24f07b354acf"
+    preset: balance
+    language: auto
+    flash: false
+    vivid: false
+
+  cosyvoice:
+    model: cosyvoice-v3.5-plus          # Lilith AI 设计音色 (vd) 需配合 v3.5-plus
+    voice: cosyvoice-v3.5-plus-vd-lilith-f40890cdc4ad4a2f8af7942e0146e593
+    sample_rate: 24000
+    api_base: "https://ws-smb7wc6sic2zhnza.cn-beijing.maas.aliyuncs.com/api/v1"
+    ws_url: "wss://ws-smb7wc6sic2zhnza.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference"
+
+  edge_tts:
+    voice: zh-CN-YunxiNeural
+    rate: "+0%"
+    volume: "+0%"
+
+  emotion_map:
+    default: "平静冷淡"
+    calm: "平静冷淡"
+    happy: "微微开心"
+    shy: "傲娇害羞"
+    sad: "沉默难过"
+    surprised: "惊讶冷淡"
+    angry: "冷冷生气"
+    curious: "冷冷好奇"

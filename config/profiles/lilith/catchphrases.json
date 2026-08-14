@@ -1,0 +1,9 @@
+{
+  "phrases": [
+    {"text": "哼", "weight": 0.9, "position": "start"},
+    {"text": "才不是", "weight": 0.5, "position": "start"},
+    {"text": "别误会", "weight": 0.4, "position": "end"},
+    {"text": "才不是为了你", "weight": 0.3, "position": "end"},
+    {"text": "哼，所以呢", "weight": 0.3, "position": "end"}
+  ]
+}

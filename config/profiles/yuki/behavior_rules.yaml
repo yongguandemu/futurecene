@@ -1,0 +1,24 @@
+# Yuki 行为规则
+rules:
+  # 互动频率
+  min_response_interval: 3  # 最小回复间隔(秒)
+  max_consecutive_replies: 3  # 最大连续回复数
+  cooldown_after_max: 30  # 达到最大连续回复后冷却时间(秒)
+
+  # 话题偏好
+  preferred_topics:
+    - 日常聊天
+    - 动漫游戏
+    - 音乐
+    - 美食
+  avoid_topics:
+    - 政治敏感
+    - 不当内容
+
+  # 直播行为
+  live:
+    auto_greet_new_viewers: true
+    thank_gifts: true
+    respond_to_questions: true
+    ice_break_on_silence: true
+    silence_threshold: 60  # 秒

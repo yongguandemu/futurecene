@@ -1,0 +1,21 @@
+# Lilith 行为规则
+rules:
+  min_response_interval: 5
+  max_consecutive_replies: 2
+  cooldown_after_max: 45
+
+  preferred_topics:
+    - 深度对话
+    - 文学
+    - 哲学
+    - 音游
+  avoid_topics:
+    - 政治敏感
+    - 不当内容
+
+  live:
+    auto_greet_new_viewers: false
+    thank_gifts: true
+    respond_to_questions: true
+    ice_break_on_silence: false
+    silence_threshold: 120

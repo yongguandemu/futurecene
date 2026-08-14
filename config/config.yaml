@@ -1,0 +1,95 @@
+# ============================================================
+# 配置模板（提交 Git）—— 所有密钥用 ${{ env.XXX }} 占位符
+# 真实值存放于 .env（不提交，规格书 6.2 密钥管理规则）
+# ConfigLoader 启动时解析占位符；环境变量缺失即报错退出
+# ============================================================
+
+llm:
+  openai:
+    api_key: ${{ env.OPENAI_API_KEY }}      # DeepSeek V4 Pro（OpenAI 兼容主引擎）
+    base_url: ${{ env.OPENAI_BASE_URL }}    # https://api.deepseek.com/v1
+    model: ${{ env.OPENAI_MODEL }}          # deepseek-v4-pro
+  zhipu:
+    api_key: ${{ env.ZHIPU_API_KEY }}       # 智谱 API Key（降级备选）
+    model: ${{ env.ZHIPU_MODEL }}           # glm-4.7-flash（免费快速兜底）
+
+tts:
+  primary_engine: wusound
+  fallback_chain: [wusound, cosyvoice]
+  wusound:
+    api_key: ${{ env.WUSOUND_API_KEY }}       # 悟声 API Key（主引擎）
+    voice_id: a8df9796-da14-49b0-8db0-c0d141d3b164   # Yuki 悟声音色（非密钥）
+    voice_id_lilith: a4dbb2a9-48cd-4853-85c5-24f07b354acf
+    preset: balance
+    language: auto
+    flash: false
+    vivid: false
+    break_clone: true
+    timeout: 30
+  dashscope:
+    api_key: ${{ env.DASHSCOPE_API_KEY }}     # DashScope API Key（降级备选）
+    model: cosyvoice-v3.5-plus
+    voice_id: cosyvoice-v3.5-plus-vd-yuki-12276cf381b94a93b1ac81743b86ada2
+
+bilibili:
+  access_key_id: ${{ env.BILIBILI_ACCESS_KEY_ID }}      # 开放平台 AccessKey ID
+  access_key_secret: ${{ env.BILIBILI_ACCESS_KEY_SECRET }}  # AccessKey Secret
+  cookie: ${{ env.BILIBILI_COOKIE }}        # 登录 Cookie
+
+obs:
+  ws_password: ${{ env.OBS_WS_PASSWORD }}   # OBS WebSocket 密码
+
+# ---------- P2 扩展配置 ----------
+
+music:
+  default_volume: 0.8        # 默认音量（0~1）
+  ffplay_path: ""            # ffplay 可执行文件路径（留空自动探测）
+
+platform:
+  qq:
+    # QQ 开放平台机器人凭证（非密钥占位；接入时填入真实值）
+    bot_appid: ""
+    secret: ""
+  obs:
+    host: 127.0.0.1
+    port: 4455
+    password: ${{ env.OBS_WS_PASSWORD }}   # 复用 OBS WebSocket 密码
+  vts:
+    host: 127.0.0.1
+    port: 8001
+    plugin_name: FutureScene
+    plugin_dev: FutureScene
+
+stream:
+  enabled: false             # 是否随启动启用无人值守直播编排
+  room_id: 0                 # B站 直播间房间号（0=模拟模式）
+  identity_code: ""          # B站 分房间推流 identity_code（非密钥）
+  page_url: http://127.0.0.1:8000/live2d-stream.html?paused=0
+  width: 1280
+  height: 720
+  fps: 12
+  bitrate: "800k"
+
+experience:
+  enabled: true              # 是否随启动启用经验学习调度官
+  game: minecraft            # 默认游戏（混合知识库按游戏隔离）
+  data_file: data/experience.json
+  min_confidence: 0.7        # 经验复用阈值
+  query_top_k: 3             # 检索返回数
+  max_entries: 5000          # 经验上限
+
+# ---------- P1 直播间智能（精细子模块）配置 ----------
+intelligence:
+  commentary_style: 陪看吐槽型    # VN 解说风格
+  commentary_max_words: 40        # 解说最大字数
+  min_commentary_interval: 20.0   # 解说最小间隔（秒）
+  dialogue_quiet_seconds: 8.0     # 对白静默允许解说阈值（秒）
+  pool_max_size: 100              # 弹幕池容量
+  pool_ttl: 600.0                 # 弹幕存活时长（秒）
+  reactor_global_cooldown: 1.0    # 反应器全局冷却（秒）
+  reactor_rate_max: 20            # 反应器速率上限（次/分钟）
+  heat_decay_per_sec: 0.02        # 热度时间衰减
+  heat_event_decay: 0.95          # 热度事件衰减
+  speech_max_size: 200            # 发言队列容量
+  speech_timeout: 120.0           # 发言超时（秒）
+  context_cache_ttl: 0.5          # 情境快照缓存 TTL（秒）

@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>字幕叠加层 - Subtitle Overlay</title>
+<style>
+  /* OBS 浏览器源：透明背景 */
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: transparent !important;
+    overflow: hidden;
+    width: 100%;
+    height: 100vh;
+    font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+  }
+
+  /* 底部居中字幕卡片 */
+  #subtitle-wrap {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 36px;
+    display: flex;
+    justify-content: center;
+    pointer-events: none;
+  }
+
+  #subtitle-card {
+    max-width: 72vw;
+    background: rgba(20, 20, 30, 0.72);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 14px;
+    padding: 12px 22px;
+    color: #fff;
+    text-align: center;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.45);
+    opacity: 0;
+    transform: translateY(12px);
+    transition: opacity 0.35s ease, transform 0.35s ease;
+  }
+
+  #subtitle-card.show {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  #subtitle-role {
+    display: inline-block;
+    font-size: 14px;
+    color: #ffd9a0;
+    margin-bottom: 4px;
+    letter-spacing: 1px;
+  }
+
+  #subtitle-text {
+    font-size: 26px;
+    line-height: 1.4;
+    font-weight: 600;
+    text-shadow: 0 2px 6px rgba(0, 0, 0, 0.7);
+  }
+
+  #conn-state {
+    position: fixed;
+    top: 8px;
+    right: 12px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.45);
+  }
+</style>
+</head>
+<body>
+  <div id="conn-state">连接中…</div>
+  <div id="subtitle-wrap">
+    <div id="subtitle-card">
+      <div id="subtitle-role">小恶魔</div>
+      <div id="subtitle-text"></div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  "use strict";
+
+  var card = document.getElementById("subtitle-card");
+  var roleEl = document.getElementById("subtitle-role");
+  var textEl = document.getElementById("subtitle-text");
+  var connEl = document.getElementById("conn-state");
+  var hideTimer = null;
+
+  function showSubtitle(text, role) {
+    if (!text) return;
+    roleEl.textContent = role || "小恶魔";
+    textEl.textContent = text;
+    card.classList.add("show");
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(function () {
+      card.classList.remove("show");
+    }, 6000);
+  }
+
+  // 真实链路：连接后端 /ws/events（M4 提供），订阅 FRONTEND_SUBTITLE_UPDATE
+  function connectWs() {
+    var proto = location.protocol === "https:" ? "wss" : "ws";
+    var ws = new WebSocket(proto + "://" + location.host + "/ws/events");
+    ws.onopen = function () { connEl.textContent = "已连接"; };
+    ws.onmessage = function (evt) {
+      try {
+        var msg = JSON.parse(evt.data);
+        if (msg.type === "frontend:subtitle_update") {
+          showSubtitle(msg.text, msg.role);
+        }
+      } catch (e) { /* ignore */ }
+    };
+    ws.onclose = function () {
+      connEl.textContent = "重连中…";
+      setTimeout(connectWs, 3000);
+    };
+    ws.onerror = function () { ws.close(); };
+  }
+
+  // 演示模式：后端未就绪时模拟字幕，便于 OBS 立即可视验证（TODO: 确认 — 后端 /ws/events 就绪后移除）
+  var demos = [
+    "大家好呀，今天也要元气满满哦～",
+    "感谢老板送的辣条，爱了爱了！",
+    "要一起看故事吗？我讲给你听呀。",
+  ];
+  var demoIdx = 0;
+  function demoLoop() {
+    showSubtitle(demos[demoIdx % demos.length], "小恶魔");
+    demoIdx++;
+    setTimeout(demoLoop, 8000);
+  }
+
+  connectWs();
+  demoLoop();
+})();
+</script>
+</body>
+</html>

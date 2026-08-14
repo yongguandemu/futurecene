@@ -1,0 +1,15 @@
+services:
+  app:
+    build: .
+    container_name: future-scene-app
+    ports:
+      - "5000:5000"
+    env_file:
+      - .env
+    environment:
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./data:/app/data          # 记忆/缓存/日志持久化
+      - ./assets:/app/assets      # Live2D 模型/音频
+      - ./config:/app/config      # 角色/作品配置
+    restart: unless-stopped

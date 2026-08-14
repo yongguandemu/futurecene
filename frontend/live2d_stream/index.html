@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Live2D 直播源</title>
+<style>
+  /* OBS 浏览器源：透明背景 */
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: transparent !important;
+    overflow: hidden;
+    width: 100%;
+    height: 100vh;
+    font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+  }
+  #canvas-holder {
+    position: fixed;
+    left: 50%;
+    bottom: 0;
+    transform: translateX(-50%);
+    width: 560px;
+    height: 720px;
+    pointer-events: none;
+  }
+  #hint {
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 13px;
+    background: rgba(0, 0, 0, 0.35);
+    border-radius: 8px;
+    padding: 6px 12px;
+    display: none;
+  }
+</style>
+</head>
+<body>
+  <div id="hint">模型加载中…</div>
+  <div id="canvas-holder"></div>
+
+  <!-- 本地 vendor：PixiJS + Live2D Cubism（离线可用，规格书 12.1） -->
+  <script src="../vendor/pixi.min.js"></script>
+  <script src="../vendor/pixi-live2d-display.min.js"></script>
+  <script src="../vendor/live2dcubismcore.min.js"></script>
+
+<script>
+(function () {
+  "use strict";
+
+  var MODEL_URL = "/assets/live2d/小恶魔/小恶魔.model3.json"; // 由 app_factory /assets/ 静态路由服务
+  var hint = document.getElementById("hint");
+
+  function showHint(text) {
+    hint.textContent = text;
+    hint.style.display = "block";
+  }
+
+  // Live2D 口型同步：监听 tts:audio_ready（表达领域协作，规格书 3.4）
+  var mouthOpen = 0;
+
+  function connectWs() {
+    var proto = location.protocol === "https:" ? "wss" : "ws";
+    try {
+      var ws = new WebSocket(proto + "://" + location.host + "/ws/events");
+      ws.onmessage = function (evt) {
+        try {
+          var msg = JSON.parse(evt.data);
+          if (msg.type === "tts:audio_ready") {
+            // 音频就绪：触发一段口型动画（音频播放由前端 WS /ws/tts_audio 提供，M4）
+            setMouth(true);
+            setTimeout(function () { setMouth(false); }, msg.duration_ms || 1500);
+          }
+        } catch (e) { /* ignore */ }
+      };
+      ws.onclose = function () { setTimeout(connectWs, 3000); };
+    } catch (e) { /* ignore */ }
+  }
+
+  function setMouth(open) {
+    mouthOpen = open ? 0.9 : 0;
+    if (window.__app && window.__app.model) {
+      try {
+        window.__app.model.internalModel.motionManager
+          .update(0, 0);
+      } catch (e) { /* ignore */ }
+    }
+  }
+
+  // 演示模式：后端未就绪时模拟口型（TODO: 确认 — /ws/tts_audio 就绪后移除）
+  var demoIdx = 0;
+  function demoMouth() {
+    demoIdx++;
+    if (demoIdx % 3 === 0) {
+      setMouth(true);
+      setTimeout(function () { setMouth(false); }, 1200);
+    }
+  }
+
+  async function boot() {
+    if (!window.PIXI || !window.PIXI.live2d) {
+      showHint("PixiJS / Live2D 库加载失败，请检查网络（OBS 需可访问 CDN）");
+      return;
+    }
+    var app = new PIXI.Application({
+      view: document.createElement("canvas"),
+      transparent: true,
+      autoStart: true,
+      width: 560,
+      height: 720,
+      antialias: true,
+    });
+    var holder = document.getElementById("canvas-holder");
+    holder.appendChild(app.view);
+    window.__app = app;
+
+    try {
+      var model = await PIXI.live2d.Live2DModel.from(MODEL_URL);
+      model.anchor.set(0.5, 1.0);
+      model.scale.set(0.42);
+      model.x = app.screen.width / 2;
+      model.y = app.screen.height;
+      app.stage.addChild(model);
+      window.__app.model = model;
+      showHint("");
+      hint.style.display = "none";
+    } catch (e) {
+      showHint("模型未就绪：" + MODEL_URL + "（模型文件迁移后自动加载）");
+      // 模型缺失时保持透明画布，不阻塞 OBS 使用
+    }
+
+    connectWs();
+    setInterval(demoMouth, 4000);
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", boot);
+  } else {
+    boot();
+  }
+})();
+</script>
+</body>
+</html>

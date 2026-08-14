@@ -1,0 +1,35 @@
+tts:
+  primary_engine: wusound
+  fallback_chain:
+  - wusound
+  - cosyvoice   # 音色保护:移除 edge_tts,宁可不发声也不变声
+  # edge_tts 配置段保留但已从降级链移除(便于将来恢复)
+  wusound:
+    voice_id: a8df9796-da14-49b0-8db0-c0d141d3b164
+    preset: balance
+    language: auto
+    flash: false
+    vivid: false
+    break_clone: true
+    timeout: 15
+  cosyvoice:
+    model: cosyvoice-v3.5-plus          # Yuki AI 设计音色 (vd) 需配合 v3.5-plus
+    voice: cosyvoice-v3.5-plus-vd-yuki-12276cf381b94a93b1ac81743b86ada2
+    sample_rate: 24000
+    api_base: "https://ws-smb7wc6sic2zhnza.cn-beijing.maas.aliyuncs.com/api/v1"
+    ws_url: "wss://ws-smb7wc6sic2zhnza.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference"
+  edge_tts:
+    voice: zh-CN-XiaoyiNeural
+    rate: +0%
+    volume: +0%
+  emotion_map:
+    default: 平静温柔
+    calm: 平静温柔
+    happy: 开心雀跃
+    shy: 害羞小声
+    sad: 低落难过
+    surprised: 兴奋好奇
+    angry: 生气克制
+    curious: 好奇疑问
+    fearful: 害怕紧张
+    disgusted: 嫌弃冷淡

@@ -1,0 +1,30 @@
+# Yuki 表情配置
+emotions:
+  default:
+    mouth_form: 0.0
+    eye_open: 1.0
+    brow: 0.0
+  happy:
+    mouth_form: 1.0
+    eye_open: 0.8
+    brow: 0.3
+  shy:
+    mouth_form: 0.5
+    eye_open: 0.6
+    brow: 0.1
+  sad:
+    mouth_form: -0.8
+    eye_open: 0.5
+    brow: -0.3
+  surprised:
+    mouth_form: 0.3
+    eye_open: 1.2
+    brow: 0.5
+  angry:
+    mouth_form: -0.5
+    eye_open: 0.9
+    brow: -0.5
+  curious:
+    mouth_form: 0.3
+    eye_open: 1.1
+    brow: 0.2

@@ -1,0 +1,46 @@
+# Lumi TTS 配置
+tts:
+  # 主引擎: 悟声 (Wusound)
+  primary_engine: wusound
+  # 降级链: 悟声 → CosyVoice → Edge-TTS
+  fallback_chain:
+    - wusound
+    - cosyvoice
+    - edge_tts
+
+  # 悟声配置
+  wusound:
+    voice_id: "a8df9796-da14-49b0-8db0-c0d141d3b164"
+    preset: balance
+    language: auto
+    flash: false
+    vivid: false
+    break_clone: true
+    timeout: 15            # 合成超时 30→15s：欠费/异常时降级更快，直播不卡顿
+
+  # CosyVoice 配置 (降级) —— Yuki AI 设计音色（角色更名后共享兜底配置指向 Yuki 音色）
+  cosyvoice:
+    model: cosyvoice-v3.5-plus
+    voice: cosyvoice-v3.5-plus-vd-yuki-12276cf381b94a93b1ac81743b86ada2
+    sample_rate: 24000
+    api_base: "https://ws-smb7wc6sic2zhnza.cn-beijing.maas.aliyuncs.com/api/v1"
+    ws_url: "wss://ws-smb7wc6sic2zhnza.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference"
+
+  # Edge-TTS 配置 (最终降级)
+  edge_tts:
+    voice: zh-CN-XiaoyiNeural
+    rate: "+0%"
+    volume: "+0%"
+
+  # 情绪映射
+  emotion_map:
+    default: "平静温柔"
+    calm: "平静温柔"
+    happy: "开心雀跃"
+    shy: "害羞小声"
+    sad: "低落难过"
+    surprised: "兴奋好奇"
+    angry: "生气克制"
+    curious: "好奇疑问"
+    fearful: "害怕紧张"
+    disgusted: "嫌弃冷淡"

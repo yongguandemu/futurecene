@@ -295,6 +295,13 @@
         pushDanmu("AI · " + (event.role || "yuki"), event.text || "", "ai");
       }
     });
+
+    // ---- 直播间联动：角色切换 → 加载对应模型（智能助手"切换到X"驱动） ----
+    store.subscribe("session:", function (state, event) {
+      if (event.type === "session:switched" && event.role) {
+        switchActor(event.role);
+      }
+    });
   }
 
   // ---- 直播测试台：弹幕发送 / 显示 ----
@@ -390,22 +397,40 @@
 
     for (var i = 0; i < ROLES.length; i++) {
       var cfg = ROLES[i];
-      var url = "/assets/live2d/" + cfg.model + "/" + cfg.model + ".model3.json";
       try {
-        var model = await PIXI.live2d.Live2DModel.from(url);
-        model.anchor.set(0.5, 1.0);
-        model.scale.set(cfg.scale || 0.42);
-        model.x = app.screen.width * (cfg.x !== undefined ? cfg.x : 0.5);
-        model.y = app.screen.height;
-        app.stage.addChild(model);
-        actors[cfg.name] = { model: model, state: "silent", timer: null, lastAudio: null };
-        setState(cfg.name, "silent");   // 呼吸限制：显式进入受控 idle
+        await loadActor(cfg);
       } catch (e) {
-        showHint("模型未就绪：" + url);
+        showHint("模型未就绪：" + "/assets/live2d/" + cfg.model + "/" + cfg.model + ".model3.json");
       }
     }
     showHint("");
     hint.style.display = "none";
+  }
+
+  // 加载单角色模型（可复用：boot 初始化 + 角色切换联动）
+  function loadActor(cfg) {
+    var url = "/assets/live2d/" + cfg.model + "/" + cfg.model + ".model3.json";
+    return PIXI.live2d.Live2DModel.from(url).then(function (model) {
+      model.anchor.set(0.5, 1.0);
+      model.scale.set(cfg.scale || 0.42);
+      model.x = app.screen.width * (cfg.x !== undefined ? cfg.x : 0.5);
+      model.y = app.screen.height;
+      app.stage.addChild(model);
+      actors[cfg.name] = { model: model, state: "silent", timer: null, lastAudio: null };
+      setState(cfg.name, "silent");   // 呼吸限制：显式进入受控 idle
+      return model;
+    });
+  }
+
+  // 角色切换联动（智能助手"切换到X"）：已加载直接静默，未加载按配置装载
+  function switchActor(role) {
+    if (!app || !window.PIXI) return;
+    if (actors[role]) { setState(role, "silent"); return; }
+    var cfg = ROLES.find(function (r) { return r.name === role; });
+    if (!cfg) return;
+    loadActor(cfg).catch(function () {
+      showHint("模型未就绪：" + cfg.model);
+    });
   }
 
   wireStore();

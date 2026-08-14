@@ -114,8 +114,15 @@ class TTSOrchestrator:
 
     # ---------- 内部实现 ----------
 
-    def _resolve_voice(self, role: str, voice: Optional[str]) -> str:
-        return voice or self._voice_map.get(role, WUSOUND_ROLE_VOICES["yuki"])
+    def _resolve_voice(self, role: str, voice: Optional[str],
+                       engine: str = "wusound") -> str:
+        """按引擎解析音色：wusound 用 wusound 音色表，cosyvoice 用 dashscope 音色表
+        （两引擎音色 ID 互不通用，混用会导致 cosyvoice 418 InvalidParameter）。"""
+        if voice:
+            return voice
+        if engine == "cosyvoice":
+            return DASHSCOPE_ROLE_VOICES.get(role, DASHSCOPE_ROLE_VOICES["yuki"])
+        return self._voice_map.get(role, WUSOUND_ROLE_VOICES["yuki"])
 
     def _synthesize(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         text = (payload.get("text") or "").strip()
@@ -124,7 +131,6 @@ class TTSOrchestrator:
         if self._primary is None:
             return {"ok": False, "data": {}, "error": "not started"}
         role = payload.get("role", "yuki")
-        voice = self._resolve_voice(role, payload.get("voice"))
         self._event_bus.publish(TTS_REQUESTED, capability="tts:synthesize", text=text)
 
         # 降级链：wusound（主）→ cosyvoice（备）→ 失败
@@ -133,6 +139,7 @@ class TTSOrchestrator:
             if client is None:
                 continue
             try:
+                voice = self._resolve_voice(role, payload.get("voice"), engine)
                 audio_id, audio_path, duration_ms = self._synthesize_to_cache(client, text, voice)
                 if audio_id is None:
                     continue

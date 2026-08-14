@@ -155,6 +155,17 @@ def test_synthesize_falls_back_to_dashscope_style():
     assert fallback.calls == 1
 
 
+def test_resolve_voice_per_engine(tmp_path):
+    """音色按引擎分表：wusound 用 wusound 音色，cosyvoice 用 dashscope 音色（避免 418）。"""
+    from src.orchestrators.tts_orchestrator.dashscope_client import ROLE_VOICES as DASHSCOPE_V
+    from src.orchestrators.tts_orchestrator.tts_orchestrator import WUSOUND_ROLE_VOICES
+    orch, _ = _make(tmp_path)
+    assert orch._resolve_voice("yuki", None, "wusound") == WUSOUND_ROLE_VOICES["yuki"]
+    assert orch._resolve_voice("yuki", None, "cosyvoice").startswith("cosyvoice")
+    assert orch._resolve_voice("lilith", None, "cosyvoice") == DASHSCOPE_V["lilith"]
+    assert orch._resolve_voice("yuki", "explicit", "cosyvoice") == "explicit"
+
+
 def tmp_path_for_fallback():
     import tempfile
     from pathlib import Path

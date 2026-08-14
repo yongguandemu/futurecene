@@ -162,6 +162,13 @@ html, body { height: 100%; overflow: hidden; }
 .fs-toast.error { border-left-color: var(--danger); }
 .fs-toast.warning { border-left-color: var(--warning); }
 
+/* ============ 卡片通用（由 assistant 迁入，系统总览使用） ============ */
+.card-header { padding: 12px 16px; border-bottom: 1px solid var(--border-subtle); display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.card-header .title { font-size: 13px; font-weight: 700; color: var(--ink-bright); }
+.card-header .sub { font-size: 11px; color: var(--ink-muted); }
+.card-body { padding: 14px 16px; }
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
 /* ============ 智能助手：对话工作台（由 assistant 迁入） ============ */
 .chat-wrap { display: grid; grid-template-columns: 1fr 300px; width: 100%; flex: 1; min-height: 0; }
 .chat-main { display: flex; flex-direction: column; min-width: 0; }
@@ -400,10 +407,20 @@ html, body { height: 100%; overflow: hidden; }
         <div class="kpi-card"><div class="kpi-label">调度官在线</div><div class="kpi-value" id="kpiOrch">-</div><div class="kpi-sub" id="kpiOrchSub">共 - 个</div></div>
         <div class="kpi-card"><div class="kpi-label">系统状态</div><div class="kpi-value" id="kpiStatus">-</div><div class="kpi-sub">健康检查</div></div>
       </div>
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-header"><span class="title">功能开关</span><span class="sub">SwitchManager</span></div>
+          <div class="card-body" id="masterSwitches"><div class="muted">加载中…</div></div>
+        </div>
+        <div class="card">
+          <div class="card-header"><span class="title">调度官健康</span><span class="sub">Watchdog</span></div>
+          <div class="card-body" id="masterWatchdog"><div class="muted">加载中…</div></div>
+        </div>
+      </div>
       <div class="section-title">调度官健康状态</div>
       <div class="badge-row" id="orchHealthRow"><span class="badge unknown">加载中…</span></div>
       <div class="section-title">会话信息</div>
-      <div class="badge-row" id="sessionRow"></div>
+      <div class="card"><div class="card-body" id="sessionRow"></div></div>
     </section>
 
     <!-- 调度官管理 -->
@@ -575,51 +592,25 @@ html, body { height: 100%; overflow: hidden; }
     var session = s.session || {};
     var row = $("sessionRow");
     if (!Object.keys(session).length) {
-      row.innerHTML = '<span class="badge unknown">无会话</span>';
+      row.innerHTML = '<div class="muted">无会话数据</div>';
     } else {
       row.innerHTML = Object.keys(session).map(function (k) {
-        return '<span class="badge info">' + esc(k) + ": " + esc(session[k]) + "</span>";
+        return '<div class="state-row"><span class="key">' + esc(k) + '</span><span class="val">' + esc(session[k]) + "</span></div>";
       }).join("");
     }
-    var sv = $("sessionState");
-    sv.innerHTML = Object.keys(session).length
-      ? Object.keys(session).map(function (k) {
-          return '<div class="state-row"><span class="key">' + esc(k) + '</span><span class="val">' + esc(session[k]) + "</span></div>";
-        }).join("")
-      : '<div class="muted">无会话数据</div>';
   }
 
-  function renderSwitches(s) {
+  // 系统总览扩展：功能开关 + 调度官健康（由 assistant view-overview 信息并入，见 Task 4）
+  function renderMasterExtras(s) {
     var sw = s.switches || {};
-    var el = $("switchState");
-    var keys = Object.keys(sw);
-    if (!keys.length) { el.innerHTML = '<div class="muted">无开关数据</div>'; return; }
-    el.innerHTML = keys.map(function (k) {
-      var on = sw[k];
-      return '<div class="state-row"><span class="key">' + esc(k) + '</span><span class="val" style="color:' + (on ? "var(--success)" : "var(--ink-dim)") + '">' + (on ? "已启用" : "已停用") + "</span></div>";
-    }).join("");
-  }
-
-  function renderDegradation(s) {
-    var d = s.degradation || {};
-    var el = $("degradationState");
-    var keys = Object.keys(d);
-    if (!keys.length) { el.innerHTML = '<div class="muted">无降级数据</div>'; return; }
-    el.innerHTML = keys.map(function (k) {
-      var v = d[k];
-      var str = typeof v === "object" ? JSON.stringify(v) : String(v);
-      return '<div class="state-row"><span class="key">' + esc(k) + '</span><span class="val">' + esc(str) + "</span></div>";
-    }).join("");
-  }
-
-  function renderRegistry(s) {
-    var el = $("registryState");
-    if (!s.orchestrators.length) { el.innerHTML = '<div class="muted">无注册调度官</div>'; return; }
-    el.innerHTML = s.orchestrators.map(function (n) {
-      var st = s.watchdog[n];
-      var color = st === "ok" ? "var(--success)" : (st === "down" ? "var(--danger)" : "var(--ink-muted)");
-      return '<div class="state-row"><span class="key">' + esc(n) + '</span><span class="val" style="color:' + color + '">' + (st || "unknown") + "</span></div>";
-    }).join("");
+    $("masterSwitches").innerHTML = Object.keys(sw).length
+      ? Object.keys(sw).map(function (n) { return '<div class="state-row"><span class="key">' + esc(n) + '</span><span class="val" style="color:' + (sw[n] ? "var(--success)" : "var(--ink-dim)") + '">' + (sw[n] ? "已启用" : "已停用") + "</span></div>"; }).join("")
+      : '<div class="muted">无开关数据</div>';
+    var wd = s.watchdog || {};
+    var wkeys = Object.keys(wd);
+    $("masterWatchdog").innerHTML = wkeys.length
+      ? wkeys.map(function (n) { return '<div class="state-row"><span class="key">' + esc(n) + '</span><span class="val" style="color:' + (wd[n] === "ok" ? "var(--success)" : wd[n] === "down" ? "var(--danger)" : "var(--ink-muted)") + '">' + esc(wd[n]) + "</span></div>"; }).join("")
+      : '<div class="muted">无健康数据</div>';
   }
 
   function renderLiveBadge(s) {
@@ -751,16 +742,14 @@ html, body { height: 100%; overflow: hidden; }
   });
 
   // ============ 订阅 ============
-  function renderAll() {
-    var s = getState();
+  function renderAll(s) {
+    s = s || getState();
     renderKpi(s);
     renderOrchHealth(s);
     renderSession(s);
-    renderSwitches(s);
-    renderDegradation(s);
-    renderRegistry(s);
     renderOrchGrid(s);
     renderLiveBadge(s);
+    renderMasterExtras(s);
   }
 
   store.subscribe('*', function (state, event) {

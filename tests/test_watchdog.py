@@ -66,3 +66,32 @@ def test_degradation_restore():
     assert restored == 1
     assert sm.is_enabled("game") is True
     assert dm.degraded is False
+
+
+def test_check_publishes_only_on_flip():
+    from src.shared.event_bus import EventBus
+    bus = EventBus()
+    bus.reset()
+    events = []
+    bus.subscribe("watchdog:changed", lambda **kw: events.append(kw))
+    wd = Watchdog()
+    wd._event_bus = bus  # 注入（Watchdog 构造无 event_bus 参数，用属性注入）
+    calls = {"n": 0}
+
+    def health():
+        calls["n"] += 1
+        return {"status": "ok"}
+
+    wd.register("llm", health)
+    wd.check()
+    wd.check()
+    assert len(events) == 0  # 连续 ok 不触发
+
+    # 翻转到 down
+    def health_down():
+        raise RuntimeError("boom")
+    wd.register("llm", health_down)
+    wd.check()
+    assert len(events) == 1
+    assert events[0]["name"] == "llm"
+    assert events[0]["status"] == "down"

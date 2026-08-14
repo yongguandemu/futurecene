@@ -83,6 +83,7 @@ AUDIO_SEGMENT_READY = "audio:segment_ready"           # 音频分片就绪（供
 # ========== 运维域 ==========
 COST_CIRCUIT_OPEN = "cost:circuit_open"               # 成本熔断器触发（P5）
 STATE_CHANGED = "state:changed"                       # 状态快照推送（含 version，供前端全量更新）
+WATCHDOG_CHANGED = "watchdog:changed"                 # 看门狗健康状态翻转（ok↔degraded↔down）
 
 # ========== QQ 平台域（P2） ==========
 QQ_CONNECTED = "qq:connected"                         # QQ 连接建立
@@ -174,6 +175,7 @@ ALL_EVENTS = frozenset({
     AUDIO_SEGMENT_READY,
     COST_CIRCUIT_OPEN,
     STATE_CHANGED,
+    WATCHDOG_CHANGED,
     QQ_CONNECTED,
     QQ_DISCONNECTED,
     QQ_GROUP_MESSAGE,

@@ -3,14 +3,14 @@
 监控所有已注册调度官的心跳：周期调用 health()，异常/超时标记为 down。
 
 # 模块内容清单（8 项契约）
-1. 模块身份标识：shared · Watchdog · 对外接口 register()/unregister()/check()/is_down()/get_status()/get_detail()/start()/stop()
+1. 模块身份标识：shared · Watchdog · 对外接口 register()/unregister()/check()/is_down()/get_status()/get_detail()/bind_event_bus()/start()/stop()
 2. 配置契约：构造参数 timeout_seconds=5.0、check_interval=2.0
 3. 输入契约：register(name, health_callable) 注册健康回调；check() 手动检查一轮
-4. 输出契约：check()/get_status() 返回 {name: status}；get_detail() 返回状态详情；is_down() 返回布尔
+4. 输出契约：check()/get_status() 返回 {name: status}；get_detail() 返回状态详情；is_down() 返回布尔；状态翻转（ok↔degraded↔down）发布 WATCHDOG_CHANGED
 5. 依赖声明：logging、threading、time、typing
-6. 错误定义：health() 异常标记 down；非法状态值归为 degraded
-7. 生命周期方法：register()/unregister()/start()/stop()/check()
-8. 领域状态说明：_health_calls 健康回调表、_status 状态表、_thread 后台线程、_running 运行标记
+6. 错误定义：health() 异常标记 down；非法状态值归为 degraded；发布事件异常记录日志不中断
+7. 生命周期方法：register()/unregister()/bind_event_bus()/start()/stop()/check()
+8. 领域状态说明：_health_calls 健康回调表、_status 状态表、_thread 后台线程、_running 运行标记、_event_bus 可选事件总线
 """
 import logging
 import threading
@@ -31,6 +31,10 @@ class Watchdog:
         self._lock = threading.RLock()
         self._thread: Optional[threading.Thread] = None
         self._running = False
+        self._event_bus = None  # 可选注入，发布 watchdog:changed
+
+    def bind_event_bus(self, event_bus) -> None:
+        self._event_bus = event_bus
 
     def register(self, name: str, health_callable: Callable[[], Dict[str, Any]]) -> None:
         """注册调度官健康检查回调（orchestrator.health）。"""
@@ -61,8 +65,18 @@ class Watchdog:
                 status = "down"
                 detail = f"health() 异常: {e}"
             with self._lock:
+                old = self._status.get(name, {}).get("status", "unknown")
                 self._status[name] = {"status": status, "last_check": time.time(),
                                       "detail": detail}
+                # 翻转判定：初始 unknown→ok 不广播（避免启动噪音）；
+                # 其余状态变化（unknown→degraded/down 与 ok↔degraded↔down）触发
+                changed = old != status and not (old == "unknown" and status == "ok")
+            if changed and self._event_bus is not None:
+                try:
+                    from src.shared.events import WATCHDOG_CHANGED
+                    self._event_bus.publish(WATCHDOG_CHANGED, name=name, status=status)
+                except Exception as e:
+                    logger.warning("[Watchdog] 发布状态变更事件失败: %s", e)
         return self.get_status()
 
     def is_down(self, name: str) -> bool:

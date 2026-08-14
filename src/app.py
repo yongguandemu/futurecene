@@ -128,6 +128,7 @@ def build_app_context():
     cost_tracker = CostTracker()
     cost_breaker = CostCircuitBreaker(event_bus, daily_limit=5.0, monthly_limit=100.0)
     watchdog = Watchdog()
+    watchdog.bind_event_bus(event_bus)
     for name in registry.all():
         watchdog.register(name.name, name.health)
     watchdog.start()

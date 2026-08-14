@@ -54,6 +54,7 @@ from src.orchestrators.tts_orchestrator import TTSOrchestrator  # noqa: E402
 from src.shared.config_loader import ConfigLoader, load  # noqa: E402
 from src.shared.crash_reporter import CrashReporter  # noqa: E402
 from src.shared.decision_log import attach as attach_decision_log  # noqa: E402
+from src.shared.events import DANMAKU_RECEIVED  # noqa: E402
 from src.shared.decision_log import clear_log, log_stats, recent_entries  # noqa: E402
 from src.shared.event_bus import EventBus  # noqa: E402
 from src.shared.logger import get  # noqa: E402
@@ -218,6 +219,10 @@ def build_app_context():
             awareness_enabled=bool((collab_cfg.get("awareness") or {}).get("enabled", True)),
         )
         collaboration.start()
+
+        # 多角色模式下弹幕由协调器仲裁分发（谁回应由规则链决定），
+        # 管线不再自行按当前角色处理（避免一条弹幕双重发言）
+        event_bus.unsubscribe(DANMAKU_RECEIVED, pipeline._on_danmaku)
 
         # ---------- 冷场自发闲聊（Task 18）：active_dialogue 角色化 ----------
         # LLM 调度官内部持有 ActiveDialogue 实例（llm_orchestrator._active，构造时已注入

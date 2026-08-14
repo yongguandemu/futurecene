@@ -2,13 +2,52 @@
 
 管理歌曲库与点歌队列：添加/删除/搜索歌曲，点歌入队/出队，标签按心情匹配。
 
-# 模块内容清单（8 项契约摘录）
+# 模块内容清单 — song_manager
+
+## 1. 模块身份标识
 - 所属调度官：music
-- 能力名：music:request_song / song_library
-- 配置契约：max_queue(50)
-- 输入契约：add_song(song_id,title,...)；request_song(song_id, requester)
-- 输出契约：request_song 入队成功返回 True；发布 music:song_requested
-- 生命周期：无；领域状态：曲库 + 点歌队列（内存态）
+- 能力名：music:request_song / music:song_library
+
+## 2. 配置契约
+| 配置项 | 必填 | 默认值 | 类型/范围 | 说明 |
+|--------|------|--------|-----------|------|
+| max_queue | 否 | 50 | int，>=1 | 点歌队列上限 |
+| library_path | 否 | 无 | str | 曲库文件路径（当前未落盘，预留） |
+
+## 3. 输入契约
+- 输入格式：`add_song(song_id, title, artist, file_path, duration, tags)` / `request_song(song_id, requester)` / `search_songs(keyword, artist, tag)` / `by_mood(mood)`
+- song_id：必填，str，唯一标识
+- title：必填，str；artist / file_path / duration / tags：可选
+- requester：可选，str，点歌人标识
+
+## 4. 输出契约
+- 成功：`add_song()/remove_song()/request_song()` 返回 `True`；`search_songs()/list_songs()/get_random()/get_top_played()` 返回歌曲 dict 列表；`get_stats()` 返回 dict
+- 失败：song_id 重复 / 队列满 / 歌曲不存在时返回 `False`
+- 事件：点歌成功发布 `music:song_requested`（song_id + requester）
+
+## 5. 依赖声明
+- 外部服务：无
+- 内部模块：`src/shared/events.MUSIC_SONG_REQUESTED`、event_bus（可选）
+- 预先配置：无
+
+## 6. 错误定义
+| 错误类型 | 触发条件 | 处理建议 |
+|----------|----------|----------|
+| 歌曲重复 | add_song 的 song_id 已存在 | 返回 False，不覆盖 |
+| 队列已满 | request_song 超过 max_queue | 返回 False，记录警告 |
+| 歌曲不存在 | request_song 的 song_id 未注册 | 返回 False |
+| 事件发布失败 | event_bus 异常 | 记录警告，不阻断入队 |
+
+## 7. 生命周期方法
+| 方法 | 必须 | 行为 |
+|------|------|------|
+| init | 是 | 构造即就绪（内存曲库 + 队列） |
+| start/stop | 否 | 无（纯内存态） |
+
+## 8. 领域状态说明
+- 状态项：`_songs`（曲库，song_id → 歌曲 dict，含 play_count）、`_request_queue`（点歌队列）
+- 持久化：无（内存态，重启丢失）
+- 恢复：重启后需重新 add_song 填充曲库
 """
 import time
 import logging

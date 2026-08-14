@@ -5,15 +5,51 @@
 职责边界：LLM 探索文本生成不直接调 llm 调度官，由接线注入 llm_fn 或 brain；
 游戏动作下发经 adapter（屏幕控制 / MC 桥），不直接 import 屏幕控制调度官。
 
-# 模块内容清单（8 项契约）
-1. 模块身份标识：experience 调度官 · experience_orchestrator · 能力 experience:start/stop/decide/feedback/inject_task/stats/knowledge/plan
-2. 配置契约：config 域（game 等）；brain 配置经 payload.config 合并
-3. 输入契约：handle(command) — capability + payload（state/scene/adapter/goal/config 等）
-4. 输出契约：返回 {"ok","data","error"}；发布 EXPERIENCE_RECORDED（经 brain）
-5. 依赖声明：logging/typing；registry、ExperienceLearnBrain、game_registry；src.shared.events
-6. 错误定义：brain 未启动 → {"ok": False, "error": "brain 未启动"}；未知 capability 返回错误
-7. 生命周期方法：start(adapter)/stop()/health()/handle()；brain 在 start 时创建
-8. 领域状态说明：_started、_brain（ExperienceLearnBrain）、_adapter、_event_bus、_config
+# 模块内容清单 — experience_orchestrator
+
+## 1. 模块身份标识
+- 所属调度官：experience
+- 能力名：experience:start / experience:stop / experience:decide / experience:feedback / experience:inject_task / experience:stats / experience:knowledge / experience:plan
+
+## 2. 配置契约
+| 配置项 | 必填 | 默认值 | 类型/范围 | 说明 |
+|--------|------|--------|-----------|------|
+| game | 否 | "" | str | 游戏名称（决定知识库加载） |
+| 其他 | 否 | 继承 | dict | brain 配置经 payload.config 合并传递给 ExperienceLearnBrain |
+
+## 3. 输入契约
+- 输入格式：`handle(command)` — dict 含 `capability`（str）+ `payload`（dict）
+- payload 字段按 capability 不同：state/scene/adapter/goal/config 等
+- 外部调用：`start(adapter)` 直接启动 brain
+
+## 4. 输出契约
+- 成功：返回 `{"ok": True, "data": dict, "error": None}`
+- 失败：brain 未启动返回 `{"ok": False, "data": {}, "error": "brain 未启动"}`；未知 capability 返回 `{"ok": False, "data": {}, "error": "unknown capability: ..."}`
+- 事件：经 brain 发布 `EXPERIENCE_RECORDED / EXPERIENCE_QUERIED / EXPERIENCE_GOAL_COMPLETED`
+
+## 5. 依赖声明
+- 外部服务：无（游戏动作下发经 adapter，不直接依赖外部服务）
+- 内部模块：`experience_orchestrator/registry`、`learn_brain.ExperienceLearnBrain`、`game_registry`、`src/shared/events`
+- 预先配置：无（start 时注入 adapter）
+
+## 6. 错误定义
+| 错误类型 | 触发条件 | 处理建议 |
+|----------|----------|----------|
+| brain 未启动 | decide/feedback/inject_task 时 brain 为 None | 返回 error，提示先 start |
+| 未知 capability | handle 收到未注册的能力名 | 返回 error，记录警告 |
+| 子模块异常 | brain 内部异常 | 经 brain 异常处理，不泄露到上层 |
+
+## 7. 生命周期方法
+| 方法 | 必须 | 行为 |
+|------|------|------|
+| start | 是 | 创建 ExperienceLearnBrain（若未注入），启动 brain 线程 |
+| stop | 是 | 停止 brain 线程 |
+| health | 是 | 返回 {"status": "ok"/"down", "detail": str} |
+
+## 8. 领域状态说明
+- 状态项：`_started`（bool）、`_brain`（ExperienceLearnBrain）、`_adapter`（游戏适配器）、`_event_bus`、`_config`
+- 持久化：经验数据由 ExperienceStore 管理（本地 json 文件）
+- 恢复：start 时重建 brain；stop 后回到未启动状态
 """
 import logging
 from typing import Any, Dict, List, Optional

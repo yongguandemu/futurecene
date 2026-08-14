@@ -3,14 +3,66 @@
 经验检索优先 → 种子规则回退 → LLM 探索。决策后经桥执行，反馈回写经验库
 （跨会话学习）。游戏无关：动作集来自原语注册表。
 
-# 模块内容清单（8 项契约摘录）
+# 模块内容清单 — learn_brain
+
+## 1. 模块身份标识
 - 所属调度官：experience
 - 能力名：experience:decide
-- 配置契约：operation_check_interval(4) / post_action_cooldown(6) / explore_llm_interval(300)
-  no_change_retry(2) / feedback_change_threshold(0.08) / fuse_limit(3) / fuse_pause(60)
-- 输入契约：decide(state, scene)；on_feedback(state_changed, event_positive, error_context)
-- 输出契约：经 adapter 下发操作；回写经验库并发布 experience:recorded
-- 生命周期：start()/stop()；flush() 落盘；领域状态：经验库 + 目标规则表
+
+## 2. 配置契约
+| 配置项 | 必填 | 默认值 | 类型/范围 | 说明 |
+|--------|------|--------|-----------|------|
+| operation_check_interval | 否 | 4.0 | float，>0 | 决策循环心跳间隔（秒） |
+| post_action_cooldown | 否 | 6.0 | float，>0 | 动作后冷却（秒） |
+| explore_llm_interval | 否 | 300 | float，>0 | LLM 探索限流间隔（秒） |
+| no_change_retry | 否 | 2 | int，>=1 | 无变化重试次数（达阈值记失败） |
+| feedback_change_threshold | 否 | 0.08 | float | 反馈变化阈值 |
+| fuse_limit | 否 | 3 | int，>=1 | 连续失败熔断阈值 |
+| fuse_pause | 否 | 60 | float，>0 | 熔断暂停时长（秒） |
+| fix_interval | 否 | 120 | float，>0 | 修正重试间隔（秒） |
+| goal_timeout | 否 | 180 | float，>0 | 外部任务超时（秒） |
+| goal_rules_file | 否 | data/goal_rules.json | str | 目标经验规则文件 |
+| goal_decide_interval | 否 | 30 | float，>0 | 总脑目标决策间隔（秒） |
+| planner_enabled | 否 | True | bool | 是否启用任务分解器 |
+| curriculum_enabled | 否 | True | bool | 是否启用自动课程 |
+| game | 否 | "" | str | 游戏名（加载知识库） |
+| data_file/min_confidence/query_top_k/max_entries/save_throttle | 否 | 见 store | - | 透传给 ExperienceStore |
+
+## 3. 输入契约
+- 输入格式：`decide(state, scene)`（内部循环调用）/ `on_feedback(state_changed, event_positive, error_context)` / `inject_task(goal)` / `on_user_correct()` / `set_llm_fn(fn)` / `set_brain(brain)` / `set_bus(event_bus)`
+- state：GameState；scene：dict（含 text/options/state）
+- goal：str，外部任务目标（非空才注入）
+- 事件订阅：`game:goal_received`（经 _make_goal_handler 回调 inject_task）
+
+## 4. 输出契约
+- 成功：`inject_task()` 返回 bool；`stats()` 返回 dict；`goal_adjustments()` 返回 dict
+- 失败：`inject_task()` goal 为空返回 `False`
+- 事件：发布 `EXPERIENCE_RECORDED / EXPERIENCE_QUERIED / EXPERIENCE_GOAL_COMPLETED`
+- 动作下发：经 adapter `_push_operation(action, args, bridge="mc")`
+
+## 5. 依赖声明
+- 外部服务：无（LLM 经 brain.generate_text / llm_fn 注入，不直接依赖）
+- 内部模块：`experience_store.ExperienceStore`、`state_encoder.GameState`、`task_planner.TaskPlanner`、`auto_curriculum.AutoCurriculum`、`primitives`、`game_registry`、`src/shared/events`
+- 预先配置：adapter 必须提供 last_scene / feedback_from_heartbeat / _push_operation（或由 orchestrator 注入）
+
+## 6. 错误定义
+| 错误类型 | 触发条件 | 处理建议 |
+|----------|----------|----------|
+| 决策循环异常 | 单次心跳异常 | 记录警告，继续下一轮 |
+| LLM 调用失败 | brain/llm_fn 异常 | 返回空串，走规则兜底 |
+| 动作下发失败 | adapter 无 _push_operation | 返回 False，不阻断 |
+| 目标规则读写失败 | goal_rules.json 损坏 | 清空 _goal_adjust，记录警告 |
+
+## 7. 生命周期方法
+| 方法 | 必须 | 行为 |
+|------|------|------|
+| start | 是 | 启动决策循环线程（daemon） |
+| stop | 是 | 置停止标记 + flush 经验库落盘 |
+
+## 8. 领域状态说明
+- 状态项：`_thread/_stop`（循环线程）、`_last_action/_last_state`（最近动作与状态）、`_fuse_count/_fuse_until`（熔断）、`_no_change_count`、`_goal_adjust`（目标经验规则）、`_external_goal*`（外部任务）、`_store`（经验库）
+- 持久化：经验库 + 目标规则（本地 json，stop 时 flush）
+- 恢复：start 重建线程；经验跨会话累积
 """
 import threading
 import time

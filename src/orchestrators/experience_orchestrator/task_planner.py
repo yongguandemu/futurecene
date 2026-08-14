@@ -3,13 +3,51 @@
 GITM 式：目标 → 子任务队列 → 逐子任务执行。子任务完成检测用地面真值
 （inventory/position）；LLM 拆解限流，rules 模板兜底（零额外 LLM）。
 
-# 模块内容清单（8 项契约摘录）
+# 模块内容清单 — task_planner
+
+## 1. 模块身份标识
 - 所属调度官：experience
 - 能力名：experience:plan
-- 配置契约：llm_plan_interval(120) / max_subtasks(8)
-- 输入契约：plan(goal, state) -> 子任务链；next_subtask() / mark_done() / is_complete()
-- 输出契约：子任务 dict 列表；is_complete 返回 bool
-- 生命周期：reset() 清空队列；领域状态：子任务队列 + 当前目标
+
+## 2. 配置契约
+| 配置项 | 必填 | 默认值 | 类型/范围 | 说明 |
+|--------|------|--------|-----------|------|
+| llm_plan_interval | 否 | 120 | float，>0 | LLM 拆解限流间隔（秒） |
+| max_subtasks | 否 | 8 | int，>=1 | 子任务队列上限 |
+
+## 3. 输入契约
+- 输入格式：`plan(goal, state)` / `next_subtask()` / `mark_done()` / `is_complete(subtask, state)` / `current_goal()` / `reset()`
+- goal：str，目标（命中 RULE_PLANS 模板则零 LLM 拆解）
+- state：dict，游戏状态（含 inventory，兼容 mc.inventory 嵌套）
+- subtask：dict，子任务（含 type/target/count）
+
+## 4. 输出契约
+- 成功：`plan()` 返回子任务 dict 列表；`next_subtask()` 返回队首子任务或 `None`；`mark_done()` 返回已完成的子任务或 `None`；`is_complete()` 返回 bool；`current_goal()` 返回 str；`reset()` 返回 `None`
+- 失败：`plan()` 未命中模板且限流未过返回 `[]`；LLM 拆解异常返回 `[]`
+- 事件：无
+
+## 5. 依赖声明
+- 外部服务：无（LLM 经 brain.generate_text 注入，未注入时返回 []）
+- 内部模块：无（纯队列 + 规则模板）
+- 预先配置：无
+
+## 6. 错误定义
+| 错误类型 | 触发条件 | 处理建议 |
+|----------|----------|----------|
+| LLM 未注入 | brain 无 generate_text | 返回 []，走 rules 模板 |
+| LLM 拆解异常 | 解析/调用异常 | 返回 []，记录警告 |
+| 队列为空 | next_subtask/mark_done 时无子任务 | 返回 None |
+
+## 7. 生命周期方法
+| 方法 | 必须 | 行为 |
+|------|------|------|
+| start/stop | 否 | 无（构造即就绪） |
+| reset | 是 | 清空子任务队列与当前目标 |
+
+## 8. 领域状态说明
+- 状态项：`_queue`（子任务队列）、`_goal`（当前目标）、`_last_llm`（LLM 限流时间戳）
+- 持久化：无（内存态，重启丢失）
+- 恢复：plan 重新生成子任务链
 """
 import threading
 import time

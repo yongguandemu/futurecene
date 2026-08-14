@@ -3,13 +3,54 @@
 对接 VTube Studio WebSocket API，控制 Live2D 模型参数、触发表情/热键。
 websocket 库缺失时降级为模拟模式（状态机可用）。
 
-# 模块内容清单（8 项契约摘录）
+# 模块内容清单 — vts_adapter
+
+## 1. 模块身份标识
 - 所属调度官：platform
-- 能力名：adapter:vts_connect / vts_param / vts_expression / vts_hotkey
-- 配置契约：host(127.0.0.1) / port(8001) / plugin_name / plugin_dev
-- 输入契约：set_parameter(param_id, value, weight)；trigger_hotkey(hotkey_id)
-- 输出契约：bool；发布 vts:connected / vts:disconnected
-- 生命周期：connect()/disconnect()；领域状态：连接标记 + 模型名
+- 能力名：adapter:vts_connect / adapter:vts_param / adapter:vts_expression / adapter:vts_hotkey
+
+## 2. 配置契约
+| 配置项 | 必填 | 默认值 | 类型/范围 | 说明 |
+|--------|------|--------|-----------|------|
+| host | 否 | "127.0.0.1" | str | VTube Studio WS 地址 |
+| port | 否 | 8001 | int，1-65535 | VTube Studio WS 端口 |
+| plugin_name | 否 | "FutureScene" | str | 插件名（认证用） |
+| plugin_dev | 否 | "FutureScene" | str | 插件开发者（认证用） |
+
+## 3. 输入契约
+- 输入格式：`connect()` / `set_parameter(param_id, value, weight)` / `set_parameters(params)` / `trigger_hotkey(hotkey_id)` / `set_expression(expression_name, intensity)` / `get_model_info()`
+- param_id：str，VTS 参数 ID；value：float 0.0-1.0（越界钳制）；weight：float 0.0-1.0
+- params：`[{"id": str, "value": float, "weight": float}, ...]`
+- hotkey_id / expression_name：str，VTS 热键/表情 ID
+
+## 4. 输出契约
+- 成功：`set_parameter()/set_parameters()/trigger_hotkey()/set_expression()` 返回 `True`；`get_model_info()` 返回 `{"model_name", "model_id", "vts_folder"}`；`get_stats()` 返回 dict
+- 失败：`get_model_info()` 未连接/命令失败返回 `None`
+- 事件：发布 `vts:connected / vts:disconnected`
+
+## 5. 依赖声明
+- 外部服务：VTube Studio（WebSocket 服务，未运行自动降级模拟模式）
+- 内部模块：`websocket` 库（缺失降级模拟模式）、`src/shared/events`、event_bus（可选）
+- 预先配置：VTS 需开启 WebSocket 插件 API
+
+## 6. 错误定义
+| 错误类型 | 触发条件 | 处理建议 |
+|----------|----------|----------|
+| websocket 缺失 | 未安装 websocket 库 | 降级模拟模式，不阻断链路 |
+| VTS 未运行 | 连接失败/超时 | 降级模拟模式，返回模拟响应 |
+| 认证失败 | AuthenticationRequest 无 token | 记录警告，命令仍可发送 |
+| 命令发送失败 | WS 发送/接收异常 | 记录错误并计数，返回 None |
+
+## 7. 生命周期方法
+| 方法 | 必须 | 行为 |
+|------|------|------|
+| connect | 是 | 建立 WS 连接 + 插件认证；失败降级模拟 |
+| disconnect | 是 | 关闭 WS 连接并清状态 |
+
+## 8. 领域状态说明
+- 状态项：`_connected`、`_mock`、`_auth_token`、`_model_name`、`_stats`（commands_sent/errors）
+- 持久化：无
+- 恢复：connect 重建连接；断线后由调用方重新 connect
 """
 import time
 import json

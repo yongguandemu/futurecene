@@ -6,13 +6,54 @@
 事件输出（event_bus 存在时）：obs:connected / obs:disconnected /
 obs:stream_started / obs:stream_stopped / obs:scene_changed。
 
-# 模块内容清单（8 项契约摘录）
+# 模块内容清单 — obs_adapter
+
+## 1. 模块身份标识
 - 所属调度官：platform
-- 能力名：adapter:obs_connect / obs_stream / obs_scene / obs_source / obs_screenshot
-- 配置契约：host(127.0.0.1) / port(4455) / password(可选)
-- 输入契约：start_streaming(server,key) / switch_scene(name) / get_scenes()
-- 输出契约：bool / 数据字典；发布 obs:* 事件
-- 生命周期：connect()/disconnect()；领域状态：连接标记 + 推流标记
+- 能力名：adapter:obs_connect / adapter:obs_stream / adapter:obs_scene / adapter:obs_source / adapter:obs_screenshot
+
+## 2. 配置契约
+| 配置项 | 必填 | 默认值 | 类型/范围 | 说明 |
+|--------|------|--------|-----------|------|
+| host | 否 | "127.0.0.1" | str | OBS WebSocket 地址 |
+| port | 否 | 4455 | int，1-65535 | OBS WebSocket 端口 |
+| password | 否 | "" | str | OBS WebSocket 密码（未启用鉴权可空） |
+
+## 3. 输入契约
+- 输入格式：`connect()` / `start_streaming(server, key)` / `stop_streaming()` / `switch_scene(scene_name)` / `get_scenes()` / `list_sources(scene_name)` / `get_screenshot(width, height)`
+- server：str，RTMP 推流地址；key：str，推流码
+- scene_name：str，OBS 场景名
+- width/height：int，截图尺寸（默认 800x450）
+
+## 4. 输出契约
+- 成功：`connect()/start_streaming()/stop_streaming()/switch_scene()` 返回 `True`；`get_scenes()/list_sources()` 返回 dict 列表；`get_screenshot()` 返回 `{"image": base64, "format": "jpg", "scene": str, "width": int, "height": int}`；`get_status()` 返回 dict
+- 失败：控制类返回 `False`；查询类返回 `[]` 或 `None`
+- 事件：发布 `obs:connected / obs:disconnected / obs:stream_started / obs:stream_stopped / obs:scene_changed`
+
+## 5. 依赖声明
+- 外部服务：OBS Studio（WebSocket 服务，未运行自动降级模拟模式）
+- 内部模块：`simpleobsws` 库（缺失降级模拟模式）、`src/shared/events`、event_bus（可选）
+- 预先配置：OBS 需开启 WebSocket 服务并设置端口/密码
+
+## 6. 错误定义
+| 错误类型 | 触发条件 | 处理建议 |
+|----------|----------|----------|
+| simpleobsws 缺失 | 未安装 simpleobsws | 降级模拟模式，不阻断链路 |
+| OBS 未运行 | 连接失败/超时 | 降级模拟模式，返回模拟响应 |
+| 认证超时 | wait_until_identified 失败 | 连接失败，降级模拟模式 |
+| 请求超时 | 单次 OBS 请求超时 | 返回 False/None，记录错误 |
+| 推流地址设置失败 | SetStreamServiceSettings 失败 | 返回 False，不开始推流 |
+
+## 7. 生命周期方法
+| 方法 | 必须 | 行为 |
+|------|------|------|
+| connect | 是 | 建立 WS 连接 + 鉴权；失败自动降级模拟 |
+| disconnect | 是 | 断开 WS 连接并清理事件循环线程 |
+
+## 8. 领域状态说明
+- 状态项：`_connected`（连接标记）、`_streaming`（推流标记）、`_mock`（模拟模式标记）、`_ws`（WS 客户端）、`_loop/_loop_thread`（异步事件循环）
+- 持久化：无
+- 恢复：connect 时重建连接；断线后由调用方重新 connect
 """
 import os
 import time

@@ -4,13 +4,52 @@
 返回 (RTMP server, key)。凭证从 Cookie 串 / .env 读取，不写死在代码里；
 Cookie / 推流码为敏感信息，不落日志。
 
-# 模块内容清单（8 项契约摘录）
+# 模块内容清单 — stream_code_refresher
+
+## 1. 模块身份标识
 - 所属调度官：stream
 - 能力名：stream:fetch_code
-- 配置契约：cookie / cookie_file / room_id / identity_code
-- 输入契约：fetch_stream_code() -> (server, key)
-- 输出契约：(RTMP server, key) 元组
-- 生命周期：无；领域状态：无（每次调用实时刷新）
+
+## 2. 配置契约
+| 配置项 | 必填 | 默认值 | 类型/范围 | 说明 |
+|--------|------|--------|-----------|------|
+| cookie | 否 | "" | str | B站 Cookie 串（含 SESSDATA / bili_jct） |
+| cookie_file | 否 | deploy/bilibili_cookie.json | str | 凭证 JSON 文件路径（含 cookie/room_id/identity_code） |
+| room_id | 否 | 0 | int，>0 | B站直播间 ID |
+| identity_code | 否 | "" | str | 身份码（开播校验用） |
+
+## 3. 输入契约
+- 输入格式：`fetch_stream_code()` -> (server, key)
+- 无参数；凭证在构造时从 cookie / cookie_file / 默认文件加载（优先级：cookie_file > cookie > 默认文件）
+
+## 4. 输出契约
+- 成功：`fetch_stream_code()` 返回 `(server, key)` 元组（str, str）
+- 失败：抛 `RuntimeError`（缺 Cookie / requests 缺失 / HTTP 非 200 / 业务错误 / 响应缺推流地址）
+- 事件：无
+
+## 5. 依赖声明
+- 外部服务：B站 startLive API（`api.live.bilibili.com/room/v1/Room/startLive`）
+- 内部模块：`requests` 库（缺失抛 RuntimeError）、`src/shared/config_loader.PROJECT_ROOT`
+- 预先配置：Cookie（SESSDATA / bili_jct）必须存在，否则 fetch_stream_code 抛异常
+
+## 6. 错误定义
+| 错误类型 | 触发条件 | 处理建议 |
+|----------|----------|----------|
+| 缺 Cookie | SESSDATA / bili_jct 为空 | 抛 RuntimeError，提示配置凭证 |
+| requests 缺失 | requests 未安装 | 抛 RuntimeError，提示安装 |
+| HTTP 错误 | startLive 非 200 | 抛 RuntimeError（含状态码） |
+| 业务错误 | 响应 code != 0 | 抛 RuntimeError（含 message） |
+| 缺推流地址 | 响应无 addr/code | 抛 RuntimeError |
+
+## 7. 生命周期方法
+| 方法 | 必须 | 行为 |
+|------|------|------|
+| start/stop | 否 | 无（无长驻资源，每次调用实时刷新） |
+
+## 8. 领域状态说明
+- 状态项：`_room_id`、`_identity_code`、`_cookie`、`_sessdata`、`_csrf`
+- 持久化：无（凭证从文件/参数加载，不落盘）
+- 恢复：构造时加载凭证；每次 fetch_stream_code 实时请求最新推流地址
 """
 import json
 import os

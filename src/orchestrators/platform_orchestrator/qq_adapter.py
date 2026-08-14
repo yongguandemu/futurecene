@@ -6,13 +6,55 @@ AccessToken 鉴权 + WebSocket 长连接接收事件，消息转发到 EventBus�
 接入：POST /app/getAppAccessToken 获取 token → GET /gateway 获取 WS 地址 →
 Identify 鉴权 → 心跳 → 接收事件。
 
-# 模块内容清单（8 项契约摘录）
+# 模块内容清单 — qq_adapter
+
+## 1. 模块身份标识
 - 所属调度官：platform
-- 能力名：adapter:qq_connect / qq_send_group / qq_send_c2c / qq_send_channel
-- 配置契约：appid / secret / intents
-- 输入契约：send_group_message(group_openid, content, msg_type, msg_id)
-- 输出契约：bool / dict；发布 qq:connected / qq:group_message / qq:c2c_message / qq:channel_message
-- 生命周期：connect()/disconnect()；领域状态：连接标记 + session_id
+- 能力名：adapter:qq_connect / adapter:qq_send_group / adapter:qq_send_c2c / adapter:qq_send_channel
+
+## 2. 配置契约
+| 配置项 | 必填 | 默认值 | 类型/范围 | 说明 |
+|--------|------|--------|-----------|------|
+| appid | 是 | 无 | str，非空 | QQ 开放平台机器人 AppID |
+| secret | 是 | 无 | str，非空 | QQ 开放平台机器人 ClientSecret |
+| intents | 否 | DEFAULT_INTENTS | int（位掩码） | 订阅事件意图（群聊+单聊+频道） |
+
+## 3. 输入契约
+- 输入格式：`connect()` / `send_group_message(group_openid, content, msg_type, msg_id)` / `send_c2c_message(openid, content, msg_type, msg_id)` / `send_channel_message(channel_id, content, msg_id)`
+- group_openid / openid / channel_id：必填，str，接收方标识
+- content：必填，str，消息内容
+- msg_type：可选，int（0=文本）；msg_id：可选，str（被动回复时回填）
+
+## 4. 输出契约
+- 成功：`connect()` 返回 `True`；`send_*()` 返回 `{"success": True, "message_id": str}`；`get_stats()` 返回 dict
+- 失败：`connect()` 返回 `False`（缺凭证/token 失败）；`send_*()` 返回 `{"success": False, "reason": str}`（token_failed / http_xxx / 异常信息）
+- 事件：发布 `qq:connected / qq:disconnected / qq:group_message / qq:c2c_message / qq:channel_message`
+
+## 5. 依赖声明
+- 外部服务：QQ 开放平台 API（`api.bot.qq.com`、`bots.qq.com`）
+- 内部模块：`websockets` 库、`requests` 库（任一缺失降级模拟模式）、`src/shared/events`、event_bus（可选）
+- 预先配置：appid + secret 必须存在，否则 connect 返回 False
+
+## 6. 错误定义
+| 错误类型 | 触发条件 | 处理建议 |
+|----------|----------|----------|
+| 缺凭证 | appid/secret 为空 | connect 返回 False，禁止运行 |
+| 依赖缺失 | websockets/requests 未安装 | 降级模拟模式 |
+| Token 获取失败 | getAppAccessToken 非 200 或无 token | connect 返回 False |
+| 发送失败 | HTTP 非 2xx | send_* 返回 success=False + reason |
+| 心跳超时 | 心跳 ACK 超时 | 自动断开并指数退避重连 |
+| 会话失效 | OP_INVALID_SESSION | 清 session 重新 Identify |
+
+## 7. 生命周期方法
+| 方法 | 必须 | 行为 |
+|------|------|------|
+| connect | 是 | 获取 token/gateway，启动 WS 线程 + 心跳线程 |
+| disconnect | 是 | 停止线程、关闭 WS、清 session |
+
+## 8. 领域状态说明
+- 状态项：`_connected`、`_session_id`、`_seq`、`_access_token`、`_token_expires_at`、`_ws_url`、`_msg_count`、`_last_event_time`
+- 持久化：无
+- 恢复：connect 重建连接；断线由 WSReconnectPolicy 指数退避重连（5s→30s）
 """
 import json
 import logging

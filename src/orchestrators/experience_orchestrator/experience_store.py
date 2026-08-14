@@ -3,13 +3,58 @@
 持久化「状态→动作→结果」三元组。置信度 = 成功次数 / 总次数；
 相似状态检索；复合技能沉淀（Voyager 式）；跨会话累积（本地 json）。
 
-# 模块内容清单（8 项契约摘录）
+# 模块内容清单 — experience_store
+
+## 1. 模块身份标识
 - 所属调度官：experience
 - 能力名：experience:record / experience:query / experience:stats
-- 配置契约：data_file(默认 data/experience/{game}.json) / min_confidence(0.7) / query_top_k(3) / max_entries(5000)
-- 输入契约：record(state, action, args, outcome)；query(state, min_confidence)
-- 输出契约：query 返回 [(rec, sim), ...]；stats 返回条目摘要
-- 生命周期：flush()（落盘）；领域状态：内存条目 + 脏标记，重启从 json 恢复
+
+## 2. 配置契约
+| 配置项 | 必填 | 默认值 | 类型/范围 | 说明 |
+|--------|------|--------|-----------|------|
+| data_file | 否 | data/experience/{game}.json | str | 经验数据文件路径 |
+| game | 否 | "default" | str | 游戏标识（决定默认文件路径） |
+| min_confidence | 否 | 0.7 | float，0.0-1.0 | 检索最低置信度阈值 |
+| query_top_k | 否 | 3 | int，>=1 | 相似检索返回最多条数 |
+| max_entries | 否 | 5000 | int，>=1 | 内存最大条目数（超限淘汰最旧） |
+| save_throttle | 否 | 5.0 | float，>0 | 落盘节流间隔（秒） |
+
+## 3. 输入契约
+- 输入格式：`record(state, action, args, outcome)` / `query(state, min_confidence)` / `record_skill(skill_name, condition, steps, success)` / `query_skill(condition, min_confidence)` / `reset()` / `flush()` / `stats()`
+- state：GameState，状态快照
+- action：str，执行的动作名
+- args：dict，动作参数
+- outcome：str ∈ {success, failure, no_change}
+- condition：dict，{type: str, ...}
+- steps：list[{action, args}...]
+
+## 4. 输出契约
+- 成功：`record()/record_skill()/flush()` 返回 `None`；`query()` 返回 `[(rec, sim), ...]`；`query_skill()` 返回 `[(rec, score), ...]`；`reset()` 返回 int（清空条数）；`stats()` 返回 dict（entries/high_confidence/file）
+- 失败：`reset()` 正常返回条数；异常时静默处理
+- 事件：无（数据由 learn_brain 发布事件）
+
+## 5. 依赖声明
+- 外部服务：本地文件系统（json 读写）
+- 内部模块：`state_encoder.GameState`、`state_encoder.StateEncoder`、`src/shared/config_loader.PROJECT_ROOT`
+- 预先配置：无（首次运行自动创建目录和文件）
+
+## 6. 错误定义
+| 错误类型 | 触发条件 | 处理建议 |
+|----------|----------|----------|
+| 加载失败 | json 文件损坏或不存在 | 清空 entries，记录警告 |
+| 写入失败 | 文件系统权限不足 | 记录警告，跳过落盘 |
+| 条目超限 | 超过 max_entries | 淘汰最旧条目后添加新条目 |
+
+## 7. 生命周期方法
+| 方法 | 必须 | 行为 |
+|------|------|------|
+| start | 否 | 构造即加载（_load 从文件恢复） |
+| stop | 否 | 由 learn_brain stop 时调用 flush 落盘 |
+
+## 8. 领域状态说明
+- 状态项：`_entries`（key → 经验记录 dict，含 success_count/fail_count/confidence）、`_dirty`（脏标记）、`_last_save`（上次保存时间）
+- 持久化：本地 json 文件，跨会话累积
+- 恢复：构造时从 data_file 加载；flush 强制落盘
 """
 import json
 import os

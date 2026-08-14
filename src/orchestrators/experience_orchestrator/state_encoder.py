@@ -4,12 +4,50 @@
 指纹 = 分区域 dHash 拼接 + 颜色直方图量化；相似度 = 指纹逐段汉明距离 + scene_type 匹配优先。
 numpy 缺失时降级为纯文本/数值相似（不依赖外部数组库）。
 
-# 模块内容清单（8 项契约摘录）
+# 模块内容清单 — state_encoder
+
+## 1. 模块身份标识
 - 所属调度官：experience
 - 能力名：experience:encode（间接）
-- 配置契约：无（纯函数）
-- 输入契约：frame(可选 numpy BGR) / scene_type / text
-- 输出契约：GameState dataclass
+
+## 2. 配置契约
+| 配置项 | 必填 | 默认值 | 类型/范围 | 说明 |
+|--------|------|--------|-----------|------|
+| 无 | - | - | - | 纯静态函数 + 数据类，无实例配置 |
+
+## 3. 输入契约
+- 输入格式：`encode(frame, scene_type, text)` / `fingerprint(frame, text_ratio)` / `similarity(a, b)` / `GameState.to_dict()/from_dict()`
+- frame：可选，numpy BGR 图像（None 或 numpy 缺失时指纹为空串）
+- scene_type：str，场景类型（默认 "unknown"）
+- text：str，画面文本
+- text_ratio：float，文本区域占比（默认 0.3）
+- a/b：GameState，待比较状态
+
+## 4. 输出契约
+- 成功：`encode()` 返回 GameState；`fingerprint()` 返回 str（指纹或空串）；`similarity()` 返回 float（0.0-1.0）
+- 失败：`fingerprint()` 帧为空 / numpy 缺失 / 异常返回空串（走文本相似兜底）
+- 事件：无
+
+## 5. 依赖声明
+- 外部服务：无
+- 内部模块：`numpy`、`PIL`（均可选，缺失自动降级）
+- 预先配置：无
+
+## 6. 错误定义
+| 错误类型 | 触发条件 | 处理建议 |
+|----------|----------|----------|
+| numpy/PIL 缺失 | 未安装 | 指纹为空串，走 scene_type + 文本相似兜底 |
+| 帧异常 | 空帧 / 形状非法 | 返回空串指纹，记录静默跳过 |
+
+## 7. 生命周期方法
+| 方法 | 必须 | 行为 |
+|------|------|------|
+| start/stop | 否 | 无（纯函数 + 数据类） |
+
+## 8. 领域状态说明
+- 状态项：无（纯函数；GameState 为不可变数据载体）
+- 持久化：无
+- 恢复：无状态，随调随用
 """
 import time
 from dataclasses import dataclass, field, asdict

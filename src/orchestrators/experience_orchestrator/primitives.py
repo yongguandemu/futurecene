@@ -4,12 +4,51 @@
 内置通用动作：press_key / click / select_option / advance / open_inventory。
 新游戏动作（如 MC Mineflayer 适配）由适配器注册 ACTION_PRIMITIVES。
 
-# 模块内容清单（8 项契约摘录）
+# 模块内容清单 — primitives
+
+## 1. 模块身份标识
 - 所属调度官：experience
-- 能力名：experience:decide 的候选动作来源
-- 配置契约：无
-- 输入契约：validate_action(action, args) -> (ok, error)
-- 输出契约：(bool, str) 二元组
+- 能力名：experience:decide 的候选动作来源（间接）
+
+## 2. 配置契约
+| 配置项 | 必填 | 默认值 | 类型/范围 | 说明 |
+|--------|------|--------|-----------|------|
+| 无 | - | - | - | 纯模块级注册表，无实例配置 |
+
+## 3. 输入契约
+- 输入格式：`validate_action(action, args)` / `register_primitive(name, desc, validate)` / `actions()`
+- action：str，动作名（须在 ACTION_PRIMITIVES 中）
+- args：dict，动作参数（由各原语 validate 校验）
+- name：str，新原语名（重复注册返回 False）
+- validate：callable(args) -> (ok, error)
+
+## 4. 输出契约
+- 成功：`validate_action()` 返回 `(True, "")`；`register_primitive()` 返回 bool；`actions()` 返回排序后的动作名列表
+- 失败：`validate_action()` 未知动作返回 `(False, "未知动作: ...")`；参数校验异常返回 `(False, "参数校验异常: ...")`；`register_primitive()` 重复注册返回 `False`
+- 事件：无
+
+## 5. 依赖声明
+- 外部服务：无
+- 内部模块：无（纯注册表 + 校验函数）
+- 预先配置：无（内置通用原语 + MC 原语在模块加载时注册）
+
+## 6. 错误定义
+| 错误类型 | 触发条件 | 处理建议 |
+|----------|----------|----------|
+| 未知动作 | action 未注册 | 返回 (False, 未知动作) |
+| 参数非法 | validate 返回 False | 返回 (False, 具体错误) |
+| 校验异常 | validate 抛异常 | 返回 (False, 参数校验异常) |
+| 重复注册 | name 已存在 | 返回 False，不覆盖 |
+
+## 7. 生命周期方法
+| 方法 | 必须 | 行为 |
+|------|------|------|
+| start/stop | 否 | 无（模块级注册表，加载即就绪） |
+
+## 8. 领域状态说明
+- 状态项：`ACTION_PRIMITIVES`（name → {desc, validate} 模块级字典）
+- 持久化：无（内存态，重启需重新注册扩展原语）
+- 恢复：内置原语随模块加载自动注册
 """
 import logging
 

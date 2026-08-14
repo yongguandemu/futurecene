@@ -3,13 +3,53 @@
 播放控制 + 播放队列 + 音量调节。支持 ffplay 音频后端（播放本地翻唱文件），
 经 EventBus 发布 music:state_changed（VoiceBridge 据此在播放时抑制 TTS 发声）。
 
-# 模块内容清单（8 项契约摘录）
+# 模块内容清单 — music_player
+
+## 1. 模块身份标识
 - 所属调度官：music
-- 能力名：music:play / pause / resume / stop / next / prev / volume / mode
-- 配置契约：default_volume(0.8) / 播放模式(sequential/shuffle/repeat_one)
-- 输入契约：play(song)、pause()、next() 等
-- 输出契约：get_state()/get_stats()；发布 music:state_changed
-- 生命周期：start()/stop()；领域状态：播放状态机 + 播放列表
+- 能力名：music:play / music:pause / music:resume / music:stop / music:next / music:prev / music:volume / music:mode
+
+## 2. 配置契约
+| 配置项 | 必填 | 默认值 | 类型/范围 | 说明 |
+|--------|------|--------|-----------|------|
+| default_volume | 否 | 0.8 | float，0.0-1.0 | 初始音量 |
+| ffplay_path | 否 | 自动探测 | str | ffplay 可执行文件路径（LUMI_FFMPEG 环境变量或默认路径） |
+| play_mode | 否 | "sequential" | str ∈ {sequential, shuffle, repeat_one} | 播放模式 |
+
+## 3. 输入契约
+- 输入格式：`play(song: dict)` / `pause()` / `resume()` / `stop()` / `next()` / `prev()` / `set_volume(volume: float)` / `set_play_mode(mode: str)`
+- song：dict，含 `title`（str，显示名）与 `file`（str，音频文件绝对路径）
+- volume：float，0.0-1.0（越界自动钳制）
+- mode：str ∈ {sequential, shuffle, repeat_one}
+
+## 4. 输出契约
+- 成功：`play()/next()/prev()` 返回 `True` 或 song dict；`get_state()` 返回 str；`get_stats()` 返回 dict
+- 失败：`play()` 播放列表为空返回 `False`；`next()/prev()` 无列表返回 `None`
+- 事件：发布 `music:state_changed`（state + song.title）
+
+## 5. 依赖声明
+- 外部服务：ffplay 可执行文件（播放音频后端，缺失时仅警告不阻断）
+- 内部模块：`src/shared/events.MUSIC_STATE_CHANGED`、event_bus（可选）
+- 预先配置：无
+
+## 6. 错误定义
+| 错误类型 | 触发条件 | 处理建议 |
+|----------|----------|----------|
+| 音频文件缺失 | song.file 不存在 | 记录警告，跳过播放 |
+| ffplay 未找到 | 无法定位 ffplay | 记录警告，不输出音频（状态机仍可用） |
+| ffplay 启动失败 | 子进程 Popen 异常 | 记录警告，置空进程句柄 |
+| 事件发布失败 | event_bus 异常 | 记录警告，不阻断播放 |
+
+## 7. 生命周期方法
+| 方法 | 必须 | 行为 |
+|------|------|------|
+| start | 否 | 无显式 start（构造即就绪） |
+| stop | 是 | 停止播放并终止 ffplay 子进程（由 orchestrator 调用） |
+
+## 8. 领域状态说明
+- 状态项：`_state`（playing/paused/stopped）、`_playlist`（播放列表）、`_current_index`、`_play_mode`、`_volume`、`_proc`（ffplay 子进程）
+- 持久化：无（全部可重建）
+- 恢复：stop 时终止子进程；重启后重新构造
 """
 import os
 import subprocess

@@ -55,8 +55,29 @@ def test_route_success():
                                                  source="danmaku",
                                                  session_id="s1")))
     assert result["ok"] is True
-    assert orch.handled[0]["payload"] == {"text": "hi"}
+    # llm:chat 自动注入 system_prompt（系统能力说明）与 history 兜底
+    assert orch.handled[0]["payload"]["text"] == "hi"
+    assert "system_prompt" in orch.handled[0]["payload"]
+    assert "Future Scene" in orch.handled[0]["payload"]["system_prompt"]
+    assert orch.handled[0]["payload"]["history"] == []
     assert events == ["received", "completed"]
+
+
+def test_llm_injects_role_profile_and_history():
+    """llm:chat 注入角色画像 + 系统能力说明 + 前端历史（问题 3/4 修复）。"""
+    router, bus, orch, _ = _make_router()
+    result = asyncio.run(router.dispatch(Command(
+        capability="llm:chat",
+        payload={"text": "我该怎么使用这个系统",
+                 "history": [{"role": "user", "content": "你好"},
+                             {"role": "assistant", "content": "嗨"}]},
+        source="command", session_id="s1")))
+    assert result["ok"] is True
+    payload = orch.handled[0]["payload"]
+    assert payload["history"] == [{"role": "user", "content": "你好"},
+                                  {"role": "assistant", "content": "嗨"}]
+    sp = payload["system_prompt"]
+    assert "Future Scene" in sp and "查看系统状态" in sp and "切换角色" in sp
 
 
 def test_unknown_capability():

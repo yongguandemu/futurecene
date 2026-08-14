@@ -41,6 +41,10 @@ def command():
     cmd = parser.parse(text, source="command",
                        session_id=data.get("session_id", "default"))
 
+    # 透传前端携带的对话历史（llm:chat 多轮上下文；_inject_llm_context 兜底为空列表）
+    if isinstance(data.get("history"), list):
+        cmd.payload["history"] = data["history"]
+
     # 指挥官内部命令（规格书 4.4）；统一生成 command_id 供前端追踪
     if cmd.capability == "session:switch" and session is not None:
         cid = uuid.uuid4().hex

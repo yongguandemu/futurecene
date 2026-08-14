@@ -109,8 +109,12 @@ def build_app_context():
         registry.register(orch)
 
     # ---------- 指挥官 ----------
+    from src.commander.character_profile import CharacterProfileLoader
+    profile_loader = CharacterProfileLoader()
     intent_parser = IntentParser()
-    command_router = CommandRouter(registry, switch_manager, event_bus)
+    command_router = CommandRouter(registry, switch_manager, event_bus,
+                                   profile_loader=profile_loader,
+                                   session=session)
 
     # ---------- 弹幕 → 对话 → TTS → Live2D 全链路（规格书 9.2） ----------
     llm_orch = registry.get("llm")
@@ -122,7 +126,8 @@ def build_app_context():
                                safety_orchestrator=safety_orch,
                                memory_orchestrator=memory_orch,
                                switch_manager=switch_manager,
-                               session=session)
+                               session=session,
+                               profile_loader=profile_loader)
     pipeline.start()
 
     # ---------- 运维：成本 / 熔断 / 看门狗 / 降级 / 崩溃 ----------

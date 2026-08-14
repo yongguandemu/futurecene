@@ -1268,7 +1268,14 @@ html, body { height: 100%; overflow: hidden; }
       }
     }, TIMEOUT_COMMAND);
 
-    API.post('/api/command', { text: raw, session_id: SESSION_ID }).then(res => {
+    // 携带最近对话历史（修复：后端多轮上下文），user 消息取纯文本，assistant 消息剥离 HTML
+    const historyMsgs = loadHistory().filter(x => x.role === 'user' || x.role === 'assistant')
+      .slice(-20).map(x => ({
+        role: x.role === 'user' ? 'user' : 'assistant',
+        content: x.role === 'user' ? String(x.text || '') : stripHtml(x.html || x.text || '')
+      }));
+
+    API.post('/api/command', { text: raw, session_id: SESSION_ID, history: historyMsgs }).then(res => {
       clearTimeout(failTimer);
       STATE.sending = false;
       $('chatSendBtn').disabled = false;

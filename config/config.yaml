@@ -11,7 +11,7 @@ llm:
     model: ${{ env.OPENAI_MODEL }}          # deepseek-v4-pro
   zhipu:
     api_key: ${{ env.ZHIPU_API_KEY }}       # 智谱 API Key（降级备选）
-    model: ${{ env.ZHIPU_MODEL }}           # glm-4.7-flash（免费快速兜底）
+    model: ${{ env.ZHIPU_MODEL }}           # glm-4.7-flashx（免费快速兜底，与 .env 保持一致）
 
 tts:
   primary_engine: wusound

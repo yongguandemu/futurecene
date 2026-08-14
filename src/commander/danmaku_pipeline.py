@@ -42,7 +42,7 @@ class DanmakuPipeline:
 
     def __init__(self, event_bus, llm_orchestrator=None, tts_orchestrator=None,
                  safety_orchestrator=None, memory_orchestrator=None,
-                 switch_manager=None, session=None):
+                 switch_manager=None, session=None, profile_loader=None):
         self._event_bus = event_bus
         self._llm = llm_orchestrator
         self._tts = tts_orchestrator
@@ -50,6 +50,7 @@ class DanmakuPipeline:
         self._memory = memory_orchestrator
         self._switch_manager = switch_manager
         self._session = session  # SessionContext（可选注入，角色实时读取）
+        self._profile_loader = profile_loader  # CharacterProfileLoader（可选注入）
         self._started = False
 
     def start(self) -> None:
@@ -71,6 +72,17 @@ class DanmakuPipeline:
         if self._session is not None:
             return getattr(self._session, "role", "yuki") or "yuki"
         return "yuki"
+
+    def _system_prompt(self) -> str:
+        """角色人设 system_prompt：实时读取角色画像，未注入时返回空（不缓存）。"""
+        if self._profile_loader is None:
+            return ""
+        try:
+            profile = self._profile_loader.load(self._current_role())
+            return profile.system_prompt if profile else ""
+        except Exception as e:
+            logger.warning("[DanmakuPipeline] 角色画像加载失败: %s", e)
+            return ""
 
     def _on_danmaku(self, event: str, content: str, user_name: str = "", **kwargs) -> None:
         text = (content or "").strip()
@@ -153,6 +165,7 @@ class DanmakuPipeline:
             result = await self._llm.handle({
                 "capability": "llm:chat",
                 "payload": {"text": text, "role": self._current_role(),
+                            "system_prompt": self._system_prompt(),
                             "history": history},
             })
         except Exception as e:

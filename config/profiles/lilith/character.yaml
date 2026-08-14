@@ -11,6 +11,12 @@ character:
   speaking_style: "冷淡中带着关心"
   catchphrase: "哼"
 
+# 相关性仲裁关键词（RelevanceRule 使用：patterns > topics > personality 加权）
+keywords:
+  personality: [高冷, 傲娇, 内心温柔]
+  topics: [直播, 吐槽, 犀利, 人气, 毒舌, 氛围]
+  patterns: ["直播", "吐槽"]
+
 theme:
   primary_color: "#d946ef"
   secondary_color: "#f0abfc"

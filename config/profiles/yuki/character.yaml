@@ -12,6 +12,12 @@ character:
   speaking_style: "温柔自然，偶尔害羞，句尾常带小语气词"
   catchphrase: "嗯～"
 
+# 相关性仲裁关键词（RelevanceRule 使用：patterns > topics > personality 加权）
+keywords:
+  personality: [温柔, 害羞, 认真, 努力]
+  topics: [故事, 月亮, 邮差, 童话, 晚安, 治愈]
+  patterns: ["讲个故事", "月亮邮差", "讲故事"]
+
 # 主题配置
 theme:
   primary_color: "#a29bfe"

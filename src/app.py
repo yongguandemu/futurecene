@@ -125,7 +125,7 @@ def build_app_context():
     pipeline.start()
 
     # ---------- 运维：成本 / 熔断 / 看门狗 / 降级 / 崩溃 ----------
-    cost_tracker = CostTracker()
+    cost_tracker = CostTracker(event_bus=event_bus)
     cost_breaker = CostCircuitBreaker(event_bus, daily_limit=5.0, monthly_limit=100.0)
     watchdog = Watchdog()
     watchdog.bind_event_bus(event_bus)

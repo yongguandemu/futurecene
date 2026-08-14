@@ -5,7 +5,7 @@
 2. session:switched / session:state_changed（角色/会话变更）
 3. degradation 变更（降级管理器）
 4. watchdog 状态翻转（ok↔degraded↔down）
-5. cost:circuit_open（成本熔断触发）
+5. cost:circuit_open / cost:milestone（成本熔断触发 / 跨整元触发）
 
 # 模块内容清单（8 项契约）
 1. 模块身份标识：commander · StatePublisher · 对外 start()/stop()
@@ -21,6 +21,7 @@ import logging
 
 from src.shared.events import (
     COST_CIRCUIT_OPEN,
+    COST_MILESTONE,
     SESSION_STATE_CHANGED,
     SESSION_SWITCHED,
     STATE_CHANGED,
@@ -37,6 +38,7 @@ _TRIGGER_EVENTS = [
     "degradation:*",
     "watchdog:*",
     COST_CIRCUIT_OPEN,
+    COST_MILESTONE,
 ]
 
 

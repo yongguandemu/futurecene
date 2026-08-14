@@ -62,3 +62,20 @@ def test_snapshot():
     snap = breaker.snapshot()
     assert snap["daily_cost"] == 0.5
     assert snap["open"] is False
+
+
+def test_cost_milestone_publishes():
+    from src.shared.event_bus import EventBus
+    from src.commander.cost_tracker import CostTracker
+    bus = EventBus()
+    bus.reset()
+    events = []
+    bus.subscribe("cost:milestone", lambda **kw: events.append(kw))
+    tracker = CostTracker(event_bus=bus, persist=False)
+    # 手动设 total 到 0.95；deepseek-v4-pro 输入 0.00042/1K、输出 0.00084/1K，
+    # 40000+40000 tokens ≈ +0.0504 → 跨 1.00 整元
+    tracker._total_cost = 0.95
+    tracker.record(call_type="llm", model="deepseek-v4-pro",
+                   prompt_tokens=40000, completion_tokens=40000)
+    assert len(events) >= 1
+    assert events[-1]["total_cost"] >= 1.0

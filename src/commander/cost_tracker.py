@@ -4,13 +4,13 @@
 
 # 模块内容清单（8 项契约）
 1. 模块身份标识：commander · CostTracker · 对外 record/snapshot/reset
-2. 配置契约：PRICING 计价表 + TTS_PRICE_PER_CHAR；构造参数 persist/persist_path；持久化 data/cost.json
+2. 配置契约：PRICING 计价表 + TTS_PRICE_PER_CHAR；构造参数 persist/persist_path/event_bus；持久化 data/cost.json
 3. 输入契约：record(call_type, provider, model, prompt_tokens, completion_tokens, chars)
-4. 输出契约：record 返回本次费用（USD）；snapshot 返回 by_type/total_cost/total_calls；可选持久化 JSON
-5. 依赖声明：json、logging、threading、time、pathlib、typing、shared.config_loader
-6. 错误定义：计价表缺失模型回退 gpt-4o-mini 单价；加载损坏 JSON 静默忽略
+4. 输出契约：record 返回本次费用（USD）；snapshot 返回 by_type/total_cost/total_calls；累计每跨整 1.00 发布 COST_MILESTONE；可选持久化 JSON
+5. 依赖声明：json、logging、threading、time、pathlib、typing、shared.config_loader、shared.events
+6. 错误定义：计价表缺失模型回退 gpt-4o-mini 单价；加载损坏 JSON 静默忽略；里程碑发布异常静默
 7. 生命周期方法：record()/snapshot()/reset()
-8. 领域状态说明：_by_type 分类型累计、_total_cost/_total_calls、_path 持久化路径
+8. 领域状态说明：_by_type 分类型累计、_total_cost/_total_calls、_path 持久化路径、_event_bus 可选事件总线
 """
 import json
 import logging
@@ -43,13 +43,15 @@ COST_FILE = PROJECT_ROOT / "data" / "cost.json"
 class CostTracker:
     """成本追踪（线程安全）。"""
 
-    def __init__(self, persist: bool = True, persist_path: str = ""):
+    def __init__(self, persist: bool = True, persist_path: str = "",
+                 event_bus=None):
         self._persist = persist
         self._path = Path(persist_path) if persist_path else COST_FILE
         self._lock = threading.RLock()
         self._by_type: Dict[str, Dict[str, Any]] = {}  # {llm/tts: {cost, calls, tokens}}
         self._total_cost = 0.0
         self._total_calls = 0
+        self._event_bus = event_bus  # 可选注入，跨整元发布 cost:milestone
         self._load()
 
     def record(self, call_type: str, provider: str = "", model: str = "",
@@ -74,8 +76,16 @@ class CostTracker:
             item["tokens"] += prompt_tokens + completion_tokens
             self._total_cost += cost
             self._total_calls += 1
+            # 跨整元里程碑（每累计满 1.00 发布 cost:milestone，触发 state:changed）
+            crossed_milestone = int(self._total_cost) > int(self._total_cost - cost)
             if self._persist:
                 self._save()
+        if crossed_milestone and self._event_bus is not None:
+            try:
+                from src.shared.events import COST_MILESTONE
+                self._event_bus.publish(COST_MILESTONE, total_cost=self._total_cost)
+            except Exception:
+                pass
         return cost
 
     def snapshot(self) -> Dict[str, Any]:

@@ -1,22 +1,34 @@
 """coordinator.py — 多角色协作顶层协调器。
 
 组装 arbitrator/turn_tracker/context_manager/triggers，订阅事件并驱动
-DanmakuPipeline.execute_with 按角色执行。对外统一接口：
-handle_danmaku / handle_speech_completed / request_utterance / snapshot / start / stop。
+执行器（pipeline）按角色执行。
+
+执行器协议（契约）：
+    async def execute_with(text, role, system_prompt, turn_context) -> dict
+- text: 发言文本；role: 角色名；system_prompt: 组合后的系统提示；
+  turn_context: 全局对话流（list[str]）；返回 dict。
+  真实实现 DanmakuPipeline 在 Task 15 提供（发言完成时发布 speech:completed）；
+  任何实现该协议的异步对象均可注入为 pipeline（参见 tests 的 FakePipeline）。
 
 事件接线：
-- danmaku:received         → 仲裁（arbitrate）→ _execute 按角色执行
-- speech:completed         → 记录话轮 + triggers 评估 → 发布 collab:utterance_requested
-- collab:utterance_requested → request_utterance → 回仲裁（冷却/互斥约束）→ 执行
+- danmaku:received         → _on_danmaku（未启动/命令前缀过滤）→ 仲裁 → _execute
+- speech:completed         → 记录话轮（唯一记录点）+ triggers 评估 → 发布 collab:utterance_requested
+- collab:utterance_requested → _on_utterance_requested → request_utterance → 回仲裁 → _execute
 
-互斥语义：arbitrate 在 acquire 成功时立即放行并持锁至 _execute 派发瞬间，
-_execute 内 record_turn 后立即 release（执行是异步的，先放行队列），随后
-_drain_queue 排空待发队列（最高优先级者先行），避免队列阻塞后续请求。
+对外接口：start / stop / request_utterance / update_runtime / snapshot / flush。
+事件回调（EventBus 订阅）：_on_danmaku / _on_speech_completed / _on_utterance_requested。
+
+互斥语义：arbitrate 在 acquire 成功时放行并持锁至执行完成——执行在独立线程
+（collab-exec，_run_in_thread）中跑完 execute_with 后 finally 释放互斥并调用
+_drain_queue 排空待发队列（deferred 在此刻放行）。同一时刻仅一人发声由互斥
+全程持有保证；execute_with 抛异常也不泄漏互斥。发布线程（含 asyncio 事件循环
+线程）内只做启动线程，不做 asyncio.run，因此任何线程下调用都安全。
 """
 import asyncio
 import logging
+import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from src.orchestrators.collaboration.arbitrator import SpeakerArbitrator
 from src.orchestrators.collaboration.context_manager import ContextManager
@@ -31,6 +43,20 @@ from src.shared.events import (
 logger = logging.getLogger(__name__)
 
 _DEFAULT_RULES_ORDER = ["mention", "intent", "relevance", "cooldown", "random"]
+
+
+def _run_in_thread(coro_fn: Callable[[], Any]) -> None:
+    """在独立守护线程中执行协程工厂函数返回的协程。
+
+    用法：_run_in_thread(lambda: coro(...))；线程名统一 collab-exec。
+    发布线程（含 asyncio 事件循环线程）内调用都安全——asyncio.run 只会在
+    新建的独立线程里创建全新事件循环，不与调用方的事件循环冲突。
+    """
+    threading.Thread(
+        target=lambda: asyncio.run(coro_fn()),
+        daemon=True,
+        name="collab-exec",
+    ).start()
 
 
 class CollaborationCoordinator:
@@ -84,6 +110,8 @@ class CollaborationCoordinator:
     # ---------- 事件入口（EventBus 同步回调） ----------
 
     def _on_danmaku(self, event: str, content: str, user_name: str = "", **kw) -> None:
+        if not self._started:
+            return
         text = (content or "").strip()
         if not text or text.startswith("!"):
             return
@@ -95,6 +123,7 @@ class CollaborationCoordinator:
                              audio_id: str = "", **kw) -> None:
         if not self._started:
             return
+        # 话轮唯一记录点（M3）：发言完成时才记入上下文与话轮追踪
         self._ctx.record_turn(role, text or audio_id)
         self._tt.record_turn(role, "speech", text=text)
         props = self._triggers.evaluate(role, text)
@@ -117,9 +146,13 @@ class CollaborationCoordinator:
             self._execute(verdict.role, ref_text or "接个话", kind=kind)
 
     def update_runtime(self, **kwargs) -> Dict[str, Any]:
-        """运行时调参（POST /api/collab/config 白名单）。"""
+        """运行时调参（POST /api/collab/config 白名单）。
+
+        白名单不含 rules_order：规则链顺序仅在构造时生效（arbitrator 组装
+        规则链），运行时不可修改规则顺序；需要调整请重建协调器。
+        """
         allowed = {"trigger_probability", "trigger_global_cooldown",
-                   "lead_role", "awareness_enabled", "rules_order"}
+                   "lead_role", "awareness_enabled"}
         for k, v in kwargs.items():
             if k in allowed:
                 self._runtime[k] = v
@@ -137,25 +170,33 @@ class CollaborationCoordinator:
                 "recent_turns": self._tt.turn_history(limit=10)}
 
     def flush(self, timeout: float = 2.0) -> None:
-        """测试辅助：等待异步执行排空（生产不使用）。"""
+        """测试辅助：等待异步执行线程排空（互斥释放且待发队列为空；生产不使用）。"""
         deadline = time.time() + timeout
-        while time.time() < deadline and self._tt.pending_count() > 0:
+        while time.time() < deadline:
+            if self._tt.current_speaker is None and self._tt.pending_count() == 0:
+                return
             time.sleep(0.01)
 
     # ---------- 内部 ----------
 
     def _execute(self, role: str, text: str, kind: str = "danmaku") -> None:
-        """仲裁放行后的入口：记录话轮 → 释放互斥 → 执行 → 排空待发队列。"""
+        """仲裁放行后的入口：启动独立执行线程。
+
+        互斥由执行线程全程持有至 execute_with 完成（finally 释放并排空），
+        此处不再提前 release；话轮记录仅发生在 _on_speech_completed（M3）。
+        """
         if self._pipeline is None:
+            # 未注入执行器：必须归还互斥，避免锁泄漏阻塞后续所有请求
+            self._tt.release(role)
             logger.warning("[Collaboration] pipeline 未注入，跳过执行 role=%s", role)
             return
-        self._tt.record_turn(role, kind, text=text)
-        self._tt.release(role)      # 释放互斥（执行异步，先放行队列）
-        self._run_utterance(role, text, kind)
-        self._drain_queue()
+        _run_in_thread(lambda: self._run_utterance(role, text, kind))
 
-    def _run_utterance(self, role: str, text: str, kind: str = "danmaku") -> None:
-        """单条执行体（供 _execute 与排空循环复用，避免递归时序问题）。"""
+    async def _run_utterance(self, role: str, text: str, kind: str = "danmaku") -> None:
+        """执行协程：构建上下文并执行 execute_with（由 _run_in_thread 的 asyncio.run 驱动）。
+
+        无论成功或异常，finally 中释放互斥并排空待发队列（deferred 放行）。
+        """
         base_prompt = ""
         if self._profiles is not None:
             load = getattr(self._profiles, "load", None)
@@ -164,21 +205,32 @@ class CollaborationCoordinator:
                 base_prompt = getattr(p, "system_prompt", "") if p else ""
         turn_context = self._ctx.global_transcript()
         try:
-            asyncio.run(self._pipeline.execute_with(
+            await self._pipeline.execute_with(
                 text=text, role=role,
                 system_prompt=self._ctx.build_system_prompt(
                     role, base_prompt, self._runtime["awareness_enabled"]),
-                turn_context=turn_context))
-        except Exception as e:
-            logger.error("[Collaboration] execute_with 异常: %s", e)
+                turn_context=turn_context)
+        except Exception:
+            logger.error("[Collaboration] execute_with 异常: role=%s text=%s",
+                         role, text, exc_info=True)
+        finally:
+            # 互斥全程持有：完成（含异常）后释放并排空待发队列
+            self._tt.release(role)
+            self._drain_queue()
 
     def _drain_queue(self) -> None:
-        """release 后立即排空待发队列（最高优先级者先行）。"""
+        """release 后排空待发队列（最高优先级者先行）。
+
+        dequeue() 会把互斥占用给弹出的下一话轮，因此一次排空至多弹出一条；
+        链式排空由新执行线程完成后的 finally（release + 再次 _drain_queue）接力，
+        直到队列清空且互斥释放。
+        """
         nxt = self._tt.dequeue()
         while nxt is not None:
             nxt_role = nxt.get("role")
             nxt_text = nxt.get("text") or nxt.get("ref_text") or ""
             nxt_kind = nxt.get("kind", "danmaku")
-            self._tt.release(nxt_role)
-            self._run_utterance(nxt_role, nxt_text, nxt_kind)
+            # 默认参数绑定避免 lambda 闭包延迟绑定循环变量
+            _run_in_thread(lambda r=nxt_role, t=nxt_text, k=nxt_kind:
+                           self._run_utterance(r, t, k))
             nxt = self._tt.dequeue()

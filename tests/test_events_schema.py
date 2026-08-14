@@ -50,3 +50,11 @@ def test_event_bus_rejects_unregistered():
         bus.publish("bogus:event")
     with pytest.raises(ValueError):
         bus.subscribe("bogus:event", lambda **kw: None)
+
+
+def test_collaboration_events_registered():
+    from src.shared import events
+    for name in ("character:presence_changed", "speech:arbitrated",
+                 "speech:completed", "collab:utterance_requested"):
+        const = getattr(events, name.upper().replace(":", "_").replace("-", "_"))
+        assert const in events.ALL_EVENTS

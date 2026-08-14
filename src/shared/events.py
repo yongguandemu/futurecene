@@ -25,6 +25,12 @@ SESSION_CREATED = "session:created"                   # 会话创建
 SESSION_SWITCHED = "session:switched"                 # 角色/场景切换
 SESSION_STATE_CHANGED = "session:state_changed"       # 会话状态变更
 
+# ========== 多角色协作域 ==========
+CHARACTER_PRESENCE_CHANGED = "character:presence_changed"  # 角色在场变更（触发 state:changed）
+SPEECH_ARBITRATED = "speech:arbitrated"                    # 仲裁结果（role/rule_hit/request_id）
+SPEECH_COMPLETED = "speech:completed"                      # 发言完成（role/text/audio_id，触发接话决策）
+COLLAB_UTTERANCE_REQUESTED = "collab:utterance_requested"  # 联动发言请求（role/kind/reason/ref_text）
+
 # ========== 开关域 ==========
 SWITCH_CHANGED = "switch:changed"                     # 开关状态变化
 
@@ -38,7 +44,7 @@ LLM_FAILED = "llm:failed"                             # LLM 调用失败
 TTS_REQUESTED = "tts:requested"                       # TTS 合成请求
 TTS_COMPLETED = "tts:completed"                       # TTS 合成完成
 TTS_FAILED = "tts:failed"                             # TTS 合成失败
-TTS_AUDIO_READY = "tts:audio_ready"                   # 音频就绪（payload 含音频 ID/路径）
+TTS_AUDIO_READY = "tts:audio_ready"                   # 音频就绪（payload 含音频 ID/路径；多角色契约：payload 含 role）
 
 # ========== Live2D 域 ==========
 LIVE2D_LOADED = "live2d:loaded"                       # 模型加载完成
@@ -142,6 +148,10 @@ ALL_EVENTS = frozenset({
     SESSION_CREATED,
     SESSION_SWITCHED,
     SESSION_STATE_CHANGED,
+    CHARACTER_PRESENCE_CHANGED,
+    SPEECH_ARBITRATED,
+    SPEECH_COMPLETED,
+    COLLAB_UTTERANCE_REQUESTED,
     SWITCH_CHANGED,
     LLM_REQUESTED,
     LLM_RESPONDED,

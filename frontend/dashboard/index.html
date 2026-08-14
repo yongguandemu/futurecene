@@ -5,7 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Future Scene · 直播控制系统</title>
 <link rel="icon" href="data:image/x-icon;base64,AA==">
-<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="/frontend/assets/tokens.css">
+<script src="/frontend/assets/store.js"></script>
+<script src="/frontend/assets/state_sync.js"></script>
 <style>
 /* ============ 布局 ============ */
 html, body { height: 100%; overflow: hidden; }
@@ -149,6 +151,17 @@ html, body { height: 100%; overflow: hidden; }
 .state-row .key { color: var(--ink-muted); }
 .state-row .val { color: var(--ink-bright); font-family: var(--font-mono); }
 
+/* ============ Toast ============ */
+.fs-toast {
+  position: fixed; bottom: 20px; right: 20px; z-index: 9999;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-left: 3px solid var(--accent); border-radius: 8px;
+  padding: 10px 16px; font-size: 12px; color: var(--ink-bright);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.5); max-width: 340px;
+}
+.fs-toast.error { border-left-color: var(--danger); }
+.fs-toast.warning { border-left-color: var(--warning); }
+
 /* ============ 响应式 ============ */
 @media (max-width: 720px) {
   :root, [data-theme] { --sidebar-width: 56px; }
@@ -235,7 +248,7 @@ html, body { height: 100%; overflow: hidden; }
       <div class="view-head">
         <div>
           <h2>调度官管理</h2>
-          <div class="sub">点击开关启停调度官（手动覆盖优先级最高）</div>
+          <div class="sub">点击开关启停调度官（等待 state:changed 确认后更新，不预测）</div>
         </div>
       </div>
       <div class="orch-grid" id="orchGrid"></div>
@@ -332,131 +345,134 @@ html, body { height: 100%; overflow: hidden; }
       return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
     });
   }
-  function fmtTime() {
-    var d = new Date();
+  function fmtTime(ts) {
+    var d = ts ? new Date(ts) : new Date();
     function p(n) { return (n < 10 ? "0" : "") + n; }
     return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
   }
-
-  // ============ 数据加载 ============
-  var orchHealth = {};   // name -> status
-  var orchNames = [];    // 注册调度官顺序
-  var switchState = {};  // name -> bool
-  var sessionData = {};
-  var degradationData = {};
-
-  function loadMetrics() {
-    fetch("/api/metrics").then(function (r) { return r.json(); }).then(function (data) {
-      var cost = data.cost || {};
-      $("kpiTotal").textContent = (cost.total_cost || 0).toFixed(4);
-      var byType = cost.by_type || {};
-      var llm = byType.llm || {}, tts = byType.tts || {};
-      $("kpiTotalSub").textContent = "LLM " + (llm.cost || 0).toFixed(4) + " · TTS " + (tts.cost || 0).toFixed(4);
-      $("kpiCalls").textContent = cost.total_calls || 0;
-      $("kpiCallsSub").textContent = "LLM " + (llm.calls || 0) + " · TTS " + (tts.calls || 0) + " 次";
-      orchHealth = data.watchdog || {};
-      renderOrchHealth();
-      renderOrchGrid();
-      renderKpiOrch();
-    }).catch(function () { /* 后端未注入 metrics_provider */ });
+  function toast(msg, type) {
+    var el = document.createElement("div");
+    el.className = "fs-toast " + (type || "info");
+    el.textContent = msg;
+    document.body.appendChild(el);
+    setTimeout(function () { el.remove(); }, 3200);
   }
 
-  function loadHealth() {
-    fetch("/api/health").then(function (r) { return r.json(); }).then(function (data) {
-      $("kpiStatus").textContent = data.status || "-";
-      $("kpiStatus").className = "kpi-value " + (data.status === "ok" ? "accent" : "warning");
-      $("masterSub").textContent = "系统状态: " + (data.status || "unknown");
-    }).catch(function () {
-      $("kpiStatus").textContent = "离线";
-      $("kpiStatus").className = "kpi-value danger";
-      $("masterSub").textContent = "无法连接后端";
-    });
+  // ============ Store + 同步 ============
+  var store = FSStore.createStore(FSStore.makeReducer(), FSStore.initialState());
+  var sync = new FSStateSync(store, {
+    onStatusChange: function (st) {
+      var dot = $("wsDot"), t = $("wsText");
+      if (st === "online") { dot.className = "status-dot green"; t.textContent = "实时连接"; }
+      else if (st === "reconnecting") { dot.className = "status-dot yellow"; t.textContent = "重连中…"; }
+      else if (st === "connecting") { dot.className = "status-dot gray"; t.textContent = "连接中…"; }
+      else { dot.className = "status-dot red"; t.textContent = "已断开"; }
+    }
+  });
+
+  function getState() { return store.getState(); }
+
+  // ============ 渲染（全部由 store 快照驱动，去掉 5s 轮询） ============
+  function systemStatus(wd) {
+    var names = Object.keys(wd || {});
+    if (!names.length) return { text: "-", cls: "" };
+    var down = names.filter(function (n) { return wd[n] === "down" || wd[n] === "failed"; }).length;
+    var deg = names.filter(function (n) { return wd[n] === "degraded"; }).length;
+    if (down) return { text: "异常", cls: "danger" };
+    if (deg) return { text: "降级", cls: "warning" };
+    return { text: "正常", cls: "accent" };
   }
 
-  function loadState() {
-    fetch("/api/state").then(function (r) { return r.json(); }).then(function (data) {
-      sessionData = data.session || {};
-      switchState = data.switches || {};
-      orchNames = data.orchestrators || [];
-      degradationData = data.degradation || {};
-      renderSession();
-      renderSwitches();
-      renderDegradation();
-      renderRegistry();
-      renderOrchGrid();
-      renderKpiOrch();
-      renderLiveBadge();
-    }).catch(function () { /* 后端未装配 */ });
+  function renderKpi(s) {
+    var cost = s.cost || {};
+    $("kpiTotal").textContent = (cost.total_cost || 0).toFixed(4);
+    var byType = cost.by_type || {};
+    var llm = byType.llm || {}, tts = byType.tts || {};
+    $("kpiTotalSub").textContent = "LLM " + (llm.cost || 0).toFixed(4) + " · TTS " + (tts.cost || 0).toFixed(4);
+    $("kpiCalls").textContent = cost.total_calls || 0;
+    $("kpiCallsSub").textContent = "LLM " + (llm.calls || 0) + " · TTS " + (tts.calls || 0) + " 次";
+    var st = systemStatus(s.watchdog);
+    $("kpiStatus").textContent = st.text;
+    $("kpiStatus").className = "kpi-value" + (st.cls ? " " + st.cls : "");
+    $("masterSub").textContent = "系统状态: " + st.text + " · 快照 v" + (s.version || 0);
+    renderKpiOrch(s);
   }
 
-  function renderKpiOrch() {
-    var names = orchNames.length ? orchNames : Object.keys(orchHealth);
-    var online = names.filter(function (n) { return orchHealth[n] === "ok"; }).length;
+  function renderKpiOrch(s) {
+    var names = s.orchestrators.length ? s.orchestrators : Object.keys(s.watchdog);
+    var online = names.filter(function (n) { return s.watchdog[n] === "ok"; }).length;
     $("kpiOrch").textContent = online + " / " + names.length;
     $("kpiOrchSub").textContent = "共 " + names.length + " 个调度官";
     $("orchCount").textContent = names.length;
   }
 
-  function renderOrchHealth() {
-    var names = Object.keys(orchHealth);
+  function renderOrchHealth(s) {
+    var names = Object.keys(s.watchdog);
     if (!names.length) {
       $("orchHealthRow").innerHTML = '<span class="badge unknown">未注入健康数据</span>';
       return;
     }
     $("orchHealthRow").innerHTML = names.map(function (n) {
-      var s = orchHealth[n];
-      var cls = s === "ok" ? "ok" : (s === "degraded" ? "degraded" : (s === "down" ? "down" : "unknown"));
-      return '<span class="badge ' + cls + '">' + esc(n) + " · " + esc(s) + "</span>";
+      var st = s.watchdog[n];
+      var cls = st === "ok" ? "ok" : (st === "degraded" ? "degraded" : (st === "down" ? "down" : "unknown"));
+      return '<span class="badge ' + cls + '">' + esc(n) + " · " + esc(st) + "</span>";
     }).join("");
   }
 
-  function renderSession() {
+  function renderSession(s) {
+    var session = s.session || {};
     var row = $("sessionRow");
-    if (!Object.keys(sessionData).length) { row.innerHTML = '<span class="badge unknown">无会话</span>'; return; }
-    row.innerHTML = Object.keys(sessionData).map(function (k) {
-      return '<span class="badge info">' + esc(k) + ": " + esc(sessionData[k]) + "</span>";
-    }).join("");
-
-    var s = $("sessionState");
-    s.innerHTML = Object.keys(sessionData).map(function (k) {
-      return '<div class="state-row"><span class="key">' + esc(k) + '</span><span class="val">' + esc(sessionData[k]) + "</span></div>";
-    }).join("");
+    if (!Object.keys(session).length) {
+      row.innerHTML = '<span class="badge unknown">无会话</span>';
+    } else {
+      row.innerHTML = Object.keys(session).map(function (k) {
+        return '<span class="badge info">' + esc(k) + ": " + esc(session[k]) + "</span>";
+      }).join("");
+    }
+    var sv = $("sessionState");
+    sv.innerHTML = Object.keys(session).length
+      ? Object.keys(session).map(function (k) {
+          return '<div class="state-row"><span class="key">' + esc(k) + '</span><span class="val">' + esc(session[k]) + "</span></div>";
+        }).join("")
+      : '<div class="muted">无会话数据</div>';
   }
 
-  function renderSwitches() {
-    var s = $("switchState");
-    var keys = Object.keys(switchState);
-    if (!keys.length) { s.innerHTML = '<div class="muted">无开关数据</div>'; return; }
-    s.innerHTML = keys.map(function (k) {
-      var on = switchState[k];
+  function renderSwitches(s) {
+    var sw = s.switches || {};
+    var el = $("switchState");
+    var keys = Object.keys(sw);
+    if (!keys.length) { el.innerHTML = '<div class="muted">无开关数据</div>'; return; }
+    el.innerHTML = keys.map(function (k) {
+      var on = sw[k];
       return '<div class="state-row"><span class="key">' + esc(k) + '</span><span class="val" style="color:' + (on ? "var(--success)" : "var(--ink-dim)") + '">' + (on ? "已启用" : "已停用") + "</span></div>";
     }).join("");
   }
 
-  function renderDegradation() {
-    var d = $("degradationState");
-    var keys = Object.keys(degradationData);
-    if (!keys.length) { d.innerHTML = '<div class="muted">无降级数据</div>'; return; }
-    d.innerHTML = keys.map(function (k) {
-      var v = degradationData[k];
+  function renderDegradation(s) {
+    var d = s.degradation || {};
+    var el = $("degradationState");
+    var keys = Object.keys(d);
+    if (!keys.length) { el.innerHTML = '<div class="muted">无降级数据</div>'; return; }
+    el.innerHTML = keys.map(function (k) {
+      var v = d[k];
       var str = typeof v === "object" ? JSON.stringify(v) : String(v);
       return '<div class="state-row"><span class="key">' + esc(k) + '</span><span class="val">' + esc(str) + "</span></div>";
     }).join("");
   }
 
-  function renderRegistry() {
-    var r = $("registryState");
-    if (!orchNames.length) { r.innerHTML = '<div class="muted">无注册调度官</div>'; return; }
-    r.innerHTML = orchNames.map(function (n) {
-      var s = orchHealth[n];
-      var color = s === "ok" ? "var(--success)" : (s === "down" ? "var(--danger)" : "var(--ink-muted)");
-      return '<div class="state-row"><span class="key">' + esc(n) + '</span><span class="val" style="color:' + color + '">' + (s || "unknown") + "</span></div>";
+  function renderRegistry(s) {
+    var el = $("registryState");
+    if (!s.orchestrators.length) { el.innerHTML = '<div class="muted">无注册调度官</div>'; return; }
+    el.innerHTML = s.orchestrators.map(function (n) {
+      var st = s.watchdog[n];
+      var color = st === "ok" ? "var(--success)" : (st === "down" ? "var(--danger)" : "var(--ink-muted)");
+      return '<div class="state-row"><span class="key">' + esc(n) + '</span><span class="val" style="color:' + color + '">' + (st || "unknown") + "</span></div>";
     }).join("");
   }
 
-  function renderLiveBadge() {
+  function renderLiveBadge(s) {
     var badge = $("liveBadge");
-    var live = sessionData.live_mode;
+    var live = (s.session || {}).live_mode;
     if (live === true || live === "on" || live === "live") {
       badge.textContent = "● 直播中";
       badge.className = "topbar-live-badge live";
@@ -466,7 +482,7 @@ html, body { height: 100%; overflow: hidden; }
     }
   }
 
-  // ============ 调度官网格 ============
+  // ============ 调度官网格（开关：只发事件不预测） ============
   var ORCH_LABELS = {
     llm: "LLM 调度官", tts: "TTS 调度官", live2d: "Live2D 调度官", bilibili: "B站调度官",
     memory: "记忆调度官", safety: "安全调度官", screen: "屏幕控制调度官", game: "游戏实况调度官"
@@ -477,15 +493,16 @@ html, body { height: 100%; overflow: hidden; }
     screen: "屏幕捕获与输入控制", game: "游戏实况与 VN 陪看"
   };
 
-  function renderOrchGrid() {
-    var names = orchNames.length ? orchNames : Object.keys(switchState);
+  function renderOrchGrid(s) {
+    var names = s.orchestrators.length ? s.orchestrators : Object.keys(s.switches);
     if (!names.length) {
       $("orchGrid").innerHTML = '<div class="card muted">未获取到调度官列表</div>';
       return;
     }
+    var sw = s.switches || {};
     $("orchGrid").innerHTML = names.map(function (n) {
-      var on = switchState[n] !== false;
-      var health = orchHealth[n] || "unknown";
+      var on = sw[n] !== false;
+      var health = s.watchdog[n] || "unknown";
       var hCls = health === "ok" ? "ok" : (health === "degraded" ? "degraded" : (health === "down" ? "down" : "unknown"));
       var label = ORCH_LABELS[n] || n;
       var desc = ORCH_DESC[n] || "调度官";
@@ -503,33 +520,40 @@ html, body { height: 100%; overflow: hidden; }
         var name = input.getAttribute("data-orch");
         var enabled = input.checked;
         input.disabled = true;
+        // 不预测：立即还原为当前 store 状态，等待 state:changed 事件到达后由 renderAll 更新
+        input.checked = getState().switches[name] !== false;
         fetch("/api/switch/" + encodeURIComponent(name), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ enabled: enabled })
         }).then(function (r) { return r.json(); }).then(function (res) {
-          if (res.ok) { switchState[name] = res.data.enabled; }
-          else { input.checked = !enabled; }
-        }).catch(function () { input.checked = !enabled; })
+          if (!res.ok) { toast("开关操作失败: " + (res.error || ""), "error"); return; }
+          if (res.command_id) {
+            // 记录命令状态，等待 state:changed 到达后 UI 才更新（不预测）
+            var cmds = getState().commands;
+            cmds[res.command_id] = { status: "sent", raw: name, error: null };
+          }
+          // 不直接改 UI！等待 state:changed 事件
+        }).catch(function () { toast("网络错误", "error"); })
         .finally(function () { input.disabled = false; });
       });
     });
   }
 
-  // ============ 事件流 ============
-  var events = [];
+  // ============ 事件流（store 驱动，按 seq 合并） ============
+  var pageEvents = [];
   var MAX_EVENTS = 200;
   var paused = false;
   var filterText = "";
 
   function renderEvents() {
     var list = $("eventList");
-    var filtered = events.filter(function (e) {
+    var filtered = pageEvents.filter(function (e) {
       if (!filterText) return true;
       return (e.type + " " + e.data).toLowerCase().indexOf(filterText.toLowerCase()) >= 0;
     });
     if (!filtered.length) {
-      list.innerHTML = '<div class="events-empty">' + (events.length ? "无匹配事件" : "等待事件推送…") + "</div>";
+      list.innerHTML = '<div class="events-empty">' + (pageEvents.length ? "无匹配事件" : "等待事件推送…") + "</div>";
       return;
     }
     list.innerHTML = filtered.map(function (e) {
@@ -541,18 +565,25 @@ html, body { height: 100%; overflow: hidden; }
     }).join("");
   }
 
-  function pushEvent(type, data) {
-    events.unshift({ time: fmtTime(), type: type, data: data });
-    if (events.length > MAX_EVENTS) events.pop();
-    $("eventCount").textContent = events.length;
+  function pushEventFromStore(event) {
+    var dataObj = Object.assign({}, event);
+    delete dataObj.type; delete dataObj.seq; delete dataObj.ts;
+    pageEvents.unshift({ time: fmtTime(event.ts), type: event.type, data: JSON.stringify(dataObj) });
+    if (pageEvents.length > MAX_EVENTS) pageEvents.pop();
+    $("eventCount").textContent = pageEvents.length;
     var badge = $("navEventCount");
-    badge.style.display = events.length ? "" : "none";
-    badge.textContent = events.length > 99 ? "99+" : events.length;
+    badge.style.display = pageEvents.length ? "" : "none";
+    badge.textContent = pageEvents.length > 99 ? "99+" : pageEvents.length;
     if (!paused) renderEvents();
   }
 
   $("eventFilter").addEventListener("input", function () { filterText = this.value; renderEvents(); });
-  $("clearEvents").addEventListener("click", function () { events = []; $("eventCount").textContent = 0; $("navEventCount").style.display = "none"; renderEvents(); });
+  $("clearEvents").addEventListener("click", function () {
+    pageEvents = [];
+    $("eventCount").textContent = 0;
+    $("navEventCount").style.display = "none";
+    renderEvents();
+  });
   $("pauseEvents").addEventListener("click", function () {
     paused = !paused;
     this.textContent = paused ? "继续" : "暂停";
@@ -560,63 +591,30 @@ html, body { height: 100%; overflow: hidden; }
     if (!paused) renderEvents();
   });
 
-  // ============ WebSocket ============
-  var ws = null;
-  var wsRetry = 0;
-  var wsTimer = null;
-
-  function setWs(status, text) {
-    var dot = $("wsDot");
-    var t = $("wsText");
-    dot.className = "status-dot " + status;
-    t.textContent = text;
+  // ============ 订阅 ============
+  function renderAll() {
+    var s = getState();
+    renderKpi(s);
+    renderOrchHealth(s);
+    renderSession(s);
+    renderSwitches(s);
+    renderDegradation(s);
+    renderRegistry(s);
+    renderOrchGrid(s);
+    renderLiveBadge(s);
   }
 
-  function connectWs() {
-    var proto = location.protocol === "https:" ? "wss" : "ws";
-    try {
-      ws = new WebSocket(proto + "://" + location.host + "/ws/events");
-    } catch (e) { scheduleReconnect(); return; }
-    ws.onopen = function () {
-      wsRetry = 0;
-      setWs("green", "实时连接");
-    };
-    ws.onmessage = function (evt) {
-      try {
-        var msg = JSON.parse(evt.data);
-        pushEvent(msg.type || "event", evt.data);
-        // 事件触发状态刷新
-        if (msg.type === "session:state_changed" || msg.type === "switch:changed" ||
-            msg.type === "frontend:status_update") {
-          loadState();
-        }
-      } catch (e) {
-        pushEvent("raw", evt.data);
-      }
-    };
-    ws.onclose = function () {
-      setWs("red", "已断开");
-      scheduleReconnect();
-    };
-    ws.onerror = function () { try { ws.close(); } catch (e) {} };
-  }
-
-  function scheduleReconnect() {
-    if (wsTimer) return;
-    var delay = Math.min(30000, Math.pow(2, wsRetry) * 1000);
-    wsRetry++;
-    setWs("yellow", "重连 " + Math.round(delay / 1000) + "s");
-    wsTimer = setTimeout(function () { wsTimer = null; connectWs(); }, delay);
-  }
+  store.subscribe('*', function (state, event) {
+    if (event.type === 'state:changed') { renderAll(); return; }
+    pushEventFromStore(event);
+  });
+  store.subscribe('switch:', function (state, event) {
+    if (event.type === 'switch:changed') renderAll();
+  });
 
   // ============ 启动 ============
-  loadHealth();
-  loadMetrics();
-  loadState();
-  setInterval(loadHealth, 5000);
-  setInterval(loadMetrics, 5000);
-  setInterval(loadState, 5000);
-  connectWs();
+  renderAll();   // 初始占位
+  sync.init();   // 首屏拉取 /api/state → 建 WS；断线/重连自动补数
 })();
 </script>
 </body>

@@ -14,9 +14,12 @@
 - danmaku:received         → _on_danmaku（未启动/命令前缀过滤）→ 仲裁 → _execute
 - speech:completed         → 记录话轮（唯一记录点）+ triggers 评估 → 发布 collab:utterance_requested
 - collab:utterance_requested → _on_utterance_requested → request_utterance → 回仲裁 → _execute
+- character:presence_changed → _on_presence_changed → _sync_present_roles（在场名单单源同步，
+  仲裁器 set_present_roles + 触发器 update_runtime(present_roles=...)，ADR-001 会话状态归指挥官）
 
 对外接口：start / stop / request_utterance / update_runtime / snapshot / flush。
-事件回调（EventBus 订阅）：_on_danmaku / _on_speech_completed / _on_utterance_requested。
+事件回调（EventBus 订阅）：_on_danmaku / _on_speech_completed / _on_utterance_requested /
+_on_presence_changed。
 
 互斥语义：arbitrate 在 acquire 成功时放行并持锁至执行完成——执行在独立线程
 （collab-exec，_run_in_thread）中跑完 execute_with 后 finally 释放互斥并调用
@@ -35,6 +38,7 @@ from src.orchestrators.collaboration.context_manager import ContextManager
 from src.orchestrators.collaboration.triggers import CollabTriggers
 from src.orchestrators.collaboration.turn_tracker import TurnTracker
 from src.shared.events import (
+    CHARACTER_PRESENCE_CHANGED,
     COLLAB_UTTERANCE_REQUESTED,
     DANMAKU_RECEIVED,
     SPEECH_COMPLETED,
@@ -43,6 +47,51 @@ from src.shared.events import (
 logger = logging.getLogger(__name__)
 
 _DEFAULT_RULES_ORDER = ["mention", "intent", "relevance", "cooldown", "random"]
+
+# 运行时调参白名单（单一来源）：app_factory 的 POST /api/collab/config 与
+# CollaborationCoordinator.update_runtime 共用，禁止两处各自维护字段集合。
+COLLAB_RUNTIME_FIELDS = frozenset({
+    "trigger_probability",
+    "trigger_global_cooldown",
+    "lead_role",
+    "awareness_enabled",
+})
+
+
+def coerce_runtime_field(key: str, value) -> tuple:
+    """校验并归一化单个运行时字段（路由与 update_runtime 共用）。
+
+    返回 (ok, coerced, error)：ok=False 时 error 为可直接返回给前端的消息。
+    - trigger_probability：数值且 0 <= x <= 1（bool 是 int 子类，排除）；
+    - trigger_global_cooldown：数值且 >= 0；
+    - lead_role：非空字符串；
+    - awareness_enabled：bool 或 "true"/"false" 字符串（按布尔解析，其余非法）。
+    """
+    if key == "trigger_probability":
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return False, None, "trigger_probability 必须为数值"
+        value = float(value)
+        if not 0.0 <= value <= 1.0:
+            return False, None, "trigger_probability 须在 [0, 1] 区间"
+        return True, value, ""
+    if key == "trigger_global_cooldown":
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return False, None, "trigger_global_cooldown 必须为数值"
+        value = float(value)
+        if value < 0:
+            return False, None, "trigger_global_cooldown 必须 >= 0"
+        return True, value, ""
+    if key == "lead_role":
+        if not isinstance(value, str) or not value.strip():
+            return False, None, "lead_role 必须为非空字符串"
+        return True, value, ""
+    if key == "awareness_enabled":
+        if isinstance(value, bool):
+            return True, value, ""
+        if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+            return True, value.strip().lower() == "true", ""
+        return False, None, "awareness_enabled 必须为布尔值或 true/false 字符串"
+    return False, None, "未知字段: {}".format(key)
 
 
 def _run_in_thread(coro_fn: Callable[[], Any]) -> None:
@@ -73,12 +122,16 @@ class CollaborationCoordinator:
         self._live2d = live2d
         self._tt = TurnTracker()
         self._ctx = ContextManager()
+        # 在场模型单一来源（ADR-001）：会话状态归指挥官，在场名单统一取自
+        # session.present_roles；session 未注入时才回退 profiles.all_roles()/默认双人组。
+        present = (set(session.present_roles) if session is not None else
+                   (set(profiles.all_roles()) if profiles else {"yuki", "lilith"}))
         self._arb = SpeakerArbitrator(event_bus, self._tt, profiles=profiles,
                                       lead_role=lead_role, rules_order=rules_order,
-                                      seed=seed)
+                                      present_roles=present, seed=seed)
         self._triggers = CollabTriggers(
             probability=trigger_probability, global_cooldown=trigger_global_cooldown,
-            present_roles=(set(profiles.all_roles()) if profiles else {"yuki", "lilith"}),
+            present_roles=present,
             seed=seed)
         self._awareness = awareness_enabled
         self._runtime = {"trigger_probability": float(trigger_probability),
@@ -96,8 +149,9 @@ class CollaborationCoordinator:
         self._event_bus.subscribe(DANMAKU_RECEIVED, self._on_danmaku)
         self._event_bus.subscribe(SPEECH_COMPLETED, self._on_speech_completed)
         self._event_bus.subscribe(COLLAB_UTTERANCE_REQUESTED, self._on_utterance_requested)
+        self._event_bus.subscribe(CHARACTER_PRESENCE_CHANGED, self._on_presence_changed)
         self._started = True
-        logger.info("[Collaboration] 已启动（订阅 danmaku/speech/completed/utterance）")
+        logger.info("[Collaboration] 已启动（订阅 danmaku/speech/completed/utterance/presence）")
 
     def stop(self) -> None:
         if not self._started:
@@ -105,6 +159,7 @@ class CollaborationCoordinator:
         self._event_bus.unsubscribe(DANMAKU_RECEIVED, self._on_danmaku)
         self._event_bus.unsubscribe(SPEECH_COMPLETED, self._on_speech_completed)
         self._event_bus.unsubscribe(COLLAB_UTTERANCE_REQUESTED, self._on_utterance_requested)
+        self._event_bus.unsubscribe(CHARACTER_PRESENCE_CHANGED, self._on_presence_changed)
         self._started = False
 
     # ---------- 事件入口（EventBus 同步回调） ----------
@@ -134,6 +189,17 @@ class CollaborationCoordinator:
                                 reason: str = "", ref_text: str = "", **kw) -> None:
         self.request_utterance(role, kind, reason, ref_text)
 
+    def _on_presence_changed(self, event: str, role: str = "", present: bool = True,
+                             **kw) -> None:
+        """角色进场/离场 → 以 session.present_roles 为唯一来源同步仲裁器与触发器。
+
+        保持在场模型单源（ADR-001）：会话状态归指挥官，session 变更事件驱动
+        下游组件刷新，避免 profiles.all_roles() 与 session 名单分叉。
+        """
+        if not self._started or self._session is None:
+            return
+        self._sync_present_roles()
+
     # ---------- 对外接口 ----------
 
     def request_utterance(self, role: str, kind: str, reason: str = "",
@@ -148,14 +214,22 @@ class CollaborationCoordinator:
     def update_runtime(self, **kwargs) -> Dict[str, Any]:
         """运行时调参（POST /api/collab/config 白名单）。
 
-        白名单不含 rules_order：规则链顺序仅在构造时生效（arbitrator 组装
-        规则链），运行时不可修改规则顺序；需要调整请重建协调器。
+        白名单由模块级 COLLAB_RUNTIME_FIELDS 定义（app_factory 路由共用），
+        不含 rules_order：规则链顺序仅在构造时生效（arbitrator 组装规则链），
+        运行时不可修改规则顺序；需要调整请重建协调器。
+        先整体校验再写入：任一字段非法即抛 ValueError，不产生部分写入污染。
         """
-        allowed = {"trigger_probability", "trigger_global_cooldown",
-                   "lead_role", "awareness_enabled"}
+        cleaned = {}
         for k, v in kwargs.items():
-            if k in allowed:
-                self._runtime[k] = v
+            if k not in COLLAB_RUNTIME_FIELDS:
+                continue
+            ok, coerced, err = coerce_runtime_field(k, v)
+            if not ok:
+                raise ValueError(err)
+            cleaned[k] = coerced
+        if not cleaned:
+            return dict(self._runtime)
+        self._runtime.update(cleaned)
         self._triggers.update_runtime(
             float(self._runtime["trigger_probability"]),
             float(self._runtime["trigger_global_cooldown"]))
@@ -178,6 +252,22 @@ class CollaborationCoordinator:
             time.sleep(0.01)
 
     # ---------- 内部 ----------
+
+    def _sync_present_roles(self) -> None:
+        """以 session.present_roles 为唯一来源刷新仲裁器与触发器在场名单。
+
+        presence_changed 事件与构造时的初始名单都走此路径，保证在场模型单源
+        （ADR-001）：session 变化立即同步下游，不依赖 profiles.all_roles() 的
+        静态全量集合（避免「全部角色在场」与「session 实际在场」分叉）。
+        """
+        if self._session is None:
+            return
+        present = set(self._session.present_roles)
+        self._arb.set_present_roles(present)
+        self._triggers.update_runtime(
+            float(self._runtime["trigger_probability"]),
+            float(self._runtime["trigger_global_cooldown"]),
+            present_roles=present)
 
     def _execute(self, role: str, text: str, kind: str = "danmaku") -> None:
         """仲裁放行后的入口：启动独立执行线程。

@@ -90,18 +90,41 @@ def test_app_boot_with_collaboration_enabled(monkeypatch):
     """COLLAB_ENABLED=1：装配协作协调器。
 
     - context 有 collaboration；
-    - 在场角色扩展为 {yuki, lilith}；
-    - POST /api/collab/config 返回 200 且 trigger_probability 生效。
+    - 在场角色扩展为 {yuki, lilith}，且仲裁器/触发器在场集与 session 一致（单源，不含 lumi）；
+    - POST /api/collab/config 返回 200 且 trigger_probability 生效；
+    - 非法值（trigger_probability="abc"/1.5）与无有效字段返回 400。
     """
     monkeypatch.setenv("COLLAB_ENABLED", "1")
     from src.app import build_app_context
 
     app, _ = build_app_context()
     ctx = app.config["APP_CONTEXT"]
-    assert ctx.get("collaboration") is not None
-    assert ctx["session"].present_roles == {"yuki", "lilith"}
-    client = app.test_client()
-    resp = client.post("/api/collab/config",
-                       json={"trigger_probability": 0.5})
-    assert resp.status_code == 200
-    assert resp.get_json()["data"]["trigger_probability"] == 0.5
+    collab = ctx.get("collaboration")
+    assert collab is not None
+    try:
+        assert ctx["session"].present_roles == {"yuki", "lilith"}
+        # a) 在场模型单一来源：仲裁器在场集 == session 在场集（== {yuki,lilith}，不含 lumi）
+        assert collab._arb._present_roles() == ctx["session"].present_roles
+        assert collab._arb._present_roles() == {"yuki", "lilith"}
+        assert collab._triggers._present == ctx["session"].present_roles
+        client = app.test_client()
+        resp = client.post("/api/collab/config",
+                           json={"trigger_probability": 0.5})
+        assert resp.status_code == 200
+        assert resp.get_json()["data"]["trigger_probability"] == 0.5
+        # b) 非法值返回 400：非数值与越界
+        resp = client.post("/api/collab/config",
+                           json={"trigger_probability": "abc"})
+        assert resp.status_code == 400
+        assert resp.get_json()["ok"] is False
+        resp = client.post("/api/collab/config",
+                           json={"trigger_probability": 1.5})
+        assert resp.status_code == 400
+        assert resp.get_json()["ok"] is False
+        # c) 无有效字段（非白名单字段）返回 400
+        resp = client.post("/api/collab/config", json={"foo": 1})
+        assert resp.status_code == 400
+        assert resp.get_json()["ok"] is False
+    finally:
+        # d) 测试结束停止协调器（build_app_context 内已 start）
+        collab.stop()

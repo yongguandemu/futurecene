@@ -13,7 +13,16 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.shared.event_bus import EventBus
+from src.shared.events import CHARACTER_PRESENCE_CHANGED
 from src.orchestrators.collaboration.coordinator import CollaborationCoordinator
+
+
+class FakeSession:
+    """会话状态最小替身：提供 present_roles（在场模型单一来源，ADR-001）。"""
+
+    def __init__(self, present_roles=None):
+        self.present_roles = set(present_roles if present_roles is not None
+                                 else {"yuki", "lilith"})
 
 
 class FakeProfiles:
@@ -70,9 +79,11 @@ def _wait_until(predicate, timeout=2.0):
     return False
 
 
-def _make_coordinator(bus, pipeline=None, trigger_probability=0.0, **kw):
+def _make_coordinator(bus, pipeline=None, trigger_probability=0.0, session=None, **kw):
     return CollaborationCoordinator(bus, pipeline=pipeline,
                                     profiles=FakeProfiles(),
+                                    session=session if session is not None
+                                    else FakeSession(),
                                     trigger_probability=trigger_probability,
                                     **kw)
 
@@ -164,4 +175,32 @@ def test_deferred_queue_drained_after_completion():
     assert _wait_until(lambda: len(pipeline.calls) == 2), "deferred 未在完成时排空"
     assert pipeline.calls[1]["text"] == "@Lilith 第二句"
     assert _wait_until(lambda: co._tt.current_speaker is None), "互斥未释放"
+    co.stop()
+
+
+def test_presence_change_syncs_single_source():
+    """在场模型单一来源：session.present_roles 变化经 presence_changed 同步仲裁器与触发器。
+
+    构造时在场名单取自 session（而非 profiles.all_roles() 静态全量）；session 变更
+    事件驱动 set_present_roles + update_runtime(present_roles=...) 收敛，无分叉。
+    """
+    bus = EventBus()
+    session = FakeSession(present_roles={"yuki", "lilith"})
+    co = _make_coordinator(bus, pipeline=FakePipeline(), session=session)
+    co.start()
+    # 初始：仲裁器与触发器在场集 == session 在场集
+    assert co._arb._present_roles() == {"yuki", "lilith"}
+    assert co._triggers._present == {"yuki", "lilith"}
+    # 离场 lilith → presence_changed → 双组件同步收敛为 {yuki}
+    session.present_roles.discard("lilith")
+    bus.publish(CHARACTER_PRESENCE_CHANGED, role="lilith", present=False,
+                session_id="s")
+    assert co._arb._present_roles() == {"yuki"}
+    assert co._triggers._present == {"yuki"}
+    # 进场 lilith → 再次同步回 {yuki, lilith}
+    session.present_roles.add("lilith")
+    bus.publish(CHARACTER_PRESENCE_CHANGED, role="lilith", present=True,
+                session_id="s")
+    assert co._arb._present_roles() == {"yuki", "lilith"}
+    assert co._triggers._present == {"yuki", "lilith"}
     co.stop()

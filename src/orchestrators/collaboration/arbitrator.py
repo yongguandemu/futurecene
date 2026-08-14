@@ -30,16 +30,28 @@ class ArbitrationVerdict:
 class SpeakerArbitrator:
     def __init__(self, event_bus, turn_tracker: Optional[TurnTracker] = None,
                  profiles=None, lead_role: str = "yuki",
-                 rules_order: Optional[List[str]] = None, seed: Optional[int] = None):
+                 rules_order: Optional[List[str]] = None,
+                 present_roles: Optional[set] = None,
+                 seed: Optional[int] = None):
         self._event_bus = event_bus
         self._tt = turn_tracker or TurnTracker()
         self._profiles = profiles
         self._lead_role = lead_role
+        # 在场模型单一来源（ADR-001，会话状态归指挥官）：注入 session.present_roles
+        # 副本；None 表示未注入，_present_roles() 回退 profiles.all_roles()/默认双人组。
+        self._present = (set(present_roles) if present_roles is not None else None)
         self._rules: List[Rule] = (make_rules_by_order(rules_order, seed=seed)
                                    if rules_order else build_default_rules(seed=seed))
 
     def set_profiles(self, profiles) -> None:
         self._profiles = profiles
+
+    def set_present_roles(self, present_roles) -> None:
+        """注入在场角色集合（session 单源同步；coordinator 订阅 presence_changed 时调用）。
+
+        None 表示恢复未注入状态（回退 profiles.all_roles()）；空集即空集（保留）。
+        """
+        self._present = (set(present_roles) if present_roles is not None else None)
 
     def set_lead_role(self, role: str) -> None:
         self._lead_role = role
@@ -88,6 +100,9 @@ class SpeakerArbitrator:
         return 5
 
     def _present_roles(self) -> set:
+        # 注入值优先（session 单源）；未注入时回退 profiles.all_roles()，再回退默认双人组
+        if self._present is not None:
+            return set(self._present)
         if self._profiles is not None and hasattr(self._profiles, "all_roles"):
             return set(self._profiles.all_roles())
         return {"yuki", "lilith"}

@@ -1,11 +1,12 @@
 """state_publisher.py — 状态变更 → state:changed 快照发布（前端重构 · 方案 A）
 
-订阅五类触发事件，收到后生成全量快照并发布 state:changed：
+订阅多类触发事件，收到后生成全量快照并发布 state:changed：
 1. switch:changed（开关切换）
 2. session:switched / session:state_changed（角色/会话变更）
-3. degradation 变更（降级管理器）
-4. watchdog 状态翻转（ok↔degraded↔down）
-5. cost:circuit_open / cost:milestone（成本熔断触发 / 跨整元触发）
+3. character:presence_changed / speech:arbitrated / speech:completed（多角色在场/发言）
+4. degradation 变更（降级管理器）
+5. watchdog 状态翻转（ok↔degraded↔down）
+6. cost:circuit_open / cost:milestone（成本熔断触发 / 跨整元触发）
 
 # 模块内容清单（8 项契约）
 1. 模块身份标识：commander · StatePublisher · 对外 start()/stop()
@@ -20,11 +21,14 @@
 import logging
 
 from src.shared.events import (
+    CHARACTER_PRESENCE_CHANGED,
     COST_CIRCUIT_OPEN,
     COST_MILESTONE,
     DEGRADATION_CHANGED,
     SESSION_STATE_CHANGED,
     SESSION_SWITCHED,
+    SPEECH_ARBITRATED,
+    SPEECH_COMPLETED,
     STATE_CHANGED,
     SWITCH_CHANGED,
     WATCHDOG_CHANGED,
@@ -37,6 +41,9 @@ _TRIGGER_EVENTS = [
     SWITCH_CHANGED,
     SESSION_SWITCHED,
     SESSION_STATE_CHANGED,
+    CHARACTER_PRESENCE_CHANGED,
+    SPEECH_ARBITRATED,
+    SPEECH_COMPLETED,
     DEGRADATION_CHANGED,
     WATCHDOG_CHANGED,
     COST_CIRCUIT_OPEN,

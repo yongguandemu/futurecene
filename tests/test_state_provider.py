@@ -44,7 +44,8 @@ def test_snapshot_structure():
     )
     snap = provider.snapshot()
     assert set(snap.keys()) == {"version", "session", "switches",
-                                "orchestrators", "degradation", "cost", "watchdog"}
+                                "orchestrators", "degradation", "cost",
+                                "watchdog", "characters"}
     assert snap["session"]["role"] == "yuki"
     assert snap["switches"]["tts"] is False
     assert snap["orchestrators"] == ["llm", "tts"]
@@ -83,4 +84,35 @@ def test_state_publisher_publishes_on_trigger():
     # 非触发事件不发布
     bus.publish("llm:requested", text="hi")
     assert len(snapshots) == 1
+    publisher.stop()
+
+
+def test_snapshot_has_characters():
+    bus = EventBus()
+    provider = StateProvider(event_bus=bus, session=FakeSession(),
+                             switch_manager=FakeSwitchManager(),
+                             registry=FakeRegistry(),
+                             degradation_manager=FakeDegradation(),
+                             metrics_provider=FakeMetrics(),
+                             characters_provider=lambda: {"yuki": {"present": True}})
+    snap = provider.snapshot()
+    assert "characters" in snap
+    assert snap["characters"]["yuki"]["present"] is True
+
+
+def test_state_publisher_triggers_on_presence():
+    bus = EventBus()
+    bus.reset()
+    from src.commander.state_publisher import StatePublisher
+    provider = StateProvider(event_bus=bus, session=FakeSession(),
+                             switch_manager=FakeSwitchManager(),
+                             registry=FakeRegistry(),
+                             degradation_manager=FakeDegradation(),
+                             metrics_provider=FakeMetrics())
+    publisher = StatePublisher(bus, provider)
+    publisher.start()
+    got = []
+    bus.subscribe("state:changed", lambda **kw: got.append(kw))
+    bus.publish("character:presence_changed", role="lilith", present=True)
+    assert len(got) == 1
     publisher.stop()

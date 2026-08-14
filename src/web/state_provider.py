@@ -21,24 +21,31 @@ class StateProvider:
 
     def __init__(self, event_bus, session=None, switch_manager=None,
                  registry=None, degradation_manager=None,
-                 metrics_provider=None):
+                 metrics_provider=None, characters_provider=None):
         self._event_bus = event_bus
         self._session = session
         self._switch_manager = switch_manager
         self._registry = registry
         self._degradation = degradation_manager
         self._metrics = metrics_provider
+        self._characters = characters_provider  # Callable[[], Dict[str, dict]] | None
 
     def snapshot(self) -> Dict[str, Any]:
         version = self._event_bus.current_seq() if self._event_bus else 0
         metrics = self._metrics() if self._metrics else {}
+        session_snap = self._session.snapshot() if self._session else {}
+        characters = self._characters() if self._characters else {}
+        if not characters and session_snap:
+            characters = {r: {"present": True}
+                          for r in session_snap.get("present_roles", [])}
         return {
             "version": version,
-            "session": self._session.snapshot() if self._session else {},
+            "session": session_snap,
             "switches": self._switch_manager.snapshot() if self._switch_manager else {},
             "orchestrators": [o.name for o in self._registry.all()]
             if self._registry else [],
             "degradation": self._degradation.snapshot() if self._degradation else {},
             "cost": metrics.get("cost", {}),
             "watchdog": metrics.get("watchdog", {}),
+            "characters": characters,
         }

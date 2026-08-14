@@ -3,6 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <title>字幕叠加层 - Subtitle Overlay</title>
+<script src="/frontend/assets/store.js"></script>
+<script src="/frontend/assets/state_sync.js"></script>
 <style>
   /* OBS 浏览器源：透明背景 */
   html, body {
@@ -99,41 +101,35 @@
     }, 6000);
   }
 
-  // 真实链路：连接后端 /ws/events（M4 提供），订阅 FRONTEND_SUBTITLE_UPDATE
-  function connectWs() {
-    var proto = location.protocol === "https:" ? "wss" : "ws";
-    var ws = new WebSocket(proto + "://" + location.host + "/ws/events");
-    ws.onopen = function () { connEl.textContent = "已连接"; };
-    ws.onmessage = function (evt) {
-      try {
-        var msg = JSON.parse(evt.data);
-        if (msg.type === "frontend:subtitle_update") {
-          showSubtitle(msg.text, msg.role);
-        }
-      } catch (e) { /* ignore */ }
-    };
-    ws.onclose = function () {
-      connEl.textContent = "重连中…";
-      setTimeout(connectWs, 3000);
-    };
-    ws.onerror = function () { ws.close(); };
+  // 数据源统一到 store：frontend:subtitle_update 事件（后端 EventBus 唯一来源）
+  function renderSubtitle(event) {
+    showSubtitle(event.text, event.role);
   }
 
-  // 演示模式：后端未就绪时模拟字幕，便于 OBS 立即可视验证（TODO: 确认 — 后端 /ws/events 就绪后移除）
-  var demos = [
-    "大家好呀，今天也要元气满满哦～",
-    "感谢老板送的辣条，爱了爱了！",
-    "要一起看故事吗？我讲给你听呀。",
-  ];
-  var demoIdx = 0;
-  function demoLoop() {
-    showSubtitle(demos[demoIdx % demos.length], "小恶魔");
-    demoIdx++;
-    setTimeout(demoLoop, 8000);
+  // tts:audio_ready：当前字幕页不播放音频（音频由其它通道输出），预留扩展点
+  function maybePlayAudio(event) {
+    // 如需在字幕页播放 TTS 音频，可在此接入 /ws/tts_audio 播放器
+    return;
   }
 
-  connectWs();
-  demoLoop();
+  // 单一 store + WS 同步：只订阅字幕相关事件前缀，忽略其他状态变更
+  var store = FSStore.createStore(FSStore.makeReducer(), FSStore.initialState());
+  var sync = new FSStateSync(store, {
+    onStatusChange: function (st) {
+      if (st === "online") connEl.textContent = "已连接";
+      else if (st === "reconnecting") connEl.textContent = "重连中…";
+      else if (st === "connecting") connEl.textContent = "连接中…";
+      else connEl.textContent = "已断开";
+    }
+  });
+  sync.init();
+
+  store.subscribe("frontend:", function (state, event) {
+    if (event.type === "frontend:subtitle_update") renderSubtitle(event);
+  });
+  store.subscribe("tts:", function (state, event) {
+    if (event.type === "tts:audio_ready") maybePlayAudio(event);
+  });
 })();
 </script>
 </body>

@@ -26,6 +26,7 @@ from src.shared.events import (
     COMMAND_FAILED,
     COMMAND_RECEIVED,
     COMMAND_ROUTED,
+    FRONTEND_SUBTITLE_UPDATE,
 )
 
 logger = logging.getLogger(__name__)
@@ -75,11 +76,43 @@ class CommandRouter:
         # 历史上下文（前端 sendCommand 携带最近对话；_build_messages 组装 system→history→text）
         command.payload.setdefault("history", [])
 
+    async def _prepare_live(self, command: Command) -> Dict[str, Any]:
+        """编排直播准备（直播间集成 · 智能助手联动）：
+        live2d:load（当前角色）→ FRONTEND_SUBTITLE_UPDATE 确认字幕。
+        load 失败不阻断（前端自行加载模型），仍返回就绪确认。
+        """
+        cid = command.command_id
+        role = getattr(self._session, "role", "yuki") if self._session else "yuki"
+        orch = self._registry.match("live2d:load")
+        load_ok = False
+        if orch is not None and self._switch_manager.is_enabled(orch.name):
+            try:
+                res = await orch.handle({
+                    "capability": "live2d:load",
+                    "payload": {"role": role,
+                                "model_name": command.payload.get("model_name") or None},
+                })
+                load_ok = bool(res.get("ok"))
+            except Exception as e:
+                logger.warning("[CommandRouter] live2d:prepare load 失败: %s", e)
+        model_name = "小恶魔" if role == "lilith" else "Hiyori"
+        text = ("直播界面已就绪，模型 %s 已装载，可以开播啦～" % model_name) if load_ok \
+               else "直播界面已就绪（模型由前端加载），可以开播啦～"
+        self._event_bus.publish(FRONTEND_SUBTITLE_UPDATE, text=text, role=role,
+                                source="live2d:prepare")
+        return {"ok": True, "command_id": cid,
+                "data": {"prepared": True, "role": role, "model": model_name}}
+
     async def dispatch(self, command: Command) -> Dict[str, Any]:
         if not command.command_id:
             command.command_id = uuid.uuid4().hex
         cid = command.command_id
         self._inject_llm_context(command)
+
+        # 直播准备编排（直播间集成）：load 当前角色模型 → 字幕确认
+        if command.capability == "live2d:prepare":
+            return await self._prepare_live(command)
+
         self._event_bus.publish(COMMAND_RECEIVED, command=command,
                                 command_id=cid)
 

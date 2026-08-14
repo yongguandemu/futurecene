@@ -45,6 +45,21 @@ def _make_router(fail=False):
     return CommandRouter(reg, sm, bus), bus, orch, sm
 
 
+def test_live2d_prepare_orchestrates():
+    """live2d:prepare → 编排 load（当前角色）+ 字幕确认（直播间集成联动）。"""
+    from src.shared.events import FRONTEND_SUBTITLE_UPDATE
+    router, bus, orch, _ = _make_router()
+    subtitles = []
+    bus.subscribe(FRONTEND_SUBTITLE_UPDATE,
+                  lambda event, **kw: subtitles.append(kw.get("text", "")))
+    result = asyncio.run(router.dispatch(Command(
+        capability="live2d:prepare", payload={},
+        source="command", session_id="s1")))
+    assert result["ok"] is True
+    assert result["data"]["prepared"] is True
+    assert any("就绪" in s for s in subtitles)
+
+
 def test_route_success():
     router, bus, orch, _ = _make_router()
     events = []

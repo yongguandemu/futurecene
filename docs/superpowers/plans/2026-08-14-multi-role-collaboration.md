@@ -552,7 +552,7 @@ git commit -m "feat(memory): 记忆按 character_id 分桶"
 - Modify: `src/commander/state_publisher.py`
 - Modify: `tests/test_state_provider.py`
 
-- [ ] **Step 1: 写失败测试**（追加到 `tests/test_state_provider.py`）
+- [x] **Step 1: 写失败测试**（追加到 `tests/test_state_provider.py`）
 
 ```python
 def test_snapshot_has_characters():
@@ -586,12 +586,12 @@ def test_state_publisher_triggers_on_presence():
     publisher.stop()
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `python -m pytest tests/test_state_provider.py::test_snapshot_has_characters -v`
 Expected: FAIL（`set(snap.keys()) == {...}` 冲突 → 需同步修改既有 `test_snapshot_structure` 断言）
 
-- [ ] **Step 3: 实现**（`src/web/state_provider.py`）
+- [x] **Step 3: 实现**（`src/web/state_provider.py`）
 
 ```python
     def __init__(self, event_bus, session=None, switch_manager=None,
@@ -641,7 +641,7 @@ _TRIGGER_EVENTS = [
 
 并更新 import：`from src.shared.events import (..., CHARACTER_PRESENCE_CHANGED, SPEECH_ARBITRATED, SPEECH_COMPLETED)`。
 
-- [ ] **Step 4: 运行确认通过 + 回归**
+- [x] **Step 4: 运行确认通过 + 回归**
 
 Run: `python -m pytest tests/test_state_provider.py -v`
 Expected: PASS
@@ -649,7 +649,7 @@ Expected: PASS
 Run: `python -m pytest -q`
 Expected: 全部通过
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add src/web/state_provider.py src/commander/state_publisher.py tests/test_state_provider.py

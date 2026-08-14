@@ -106,7 +106,7 @@ intelligence:
 # - trigger_global_cooldown: 联动接话全局冷却（秒），防连续接话刷屏。
 # - awareness: 感知彼此——为发言角色注入对方最近发言（max_partner_lines 条）。
 collaboration:
-  enabled: false
+  enabled: true   # 验收临时开启（验收后恢复 false）
   # 规则链（V2 加入结构规则）：mention(@指定) > intent(系统意图→lead) >
   # continuation(观众回应上一位发言者) > relevance(话题相关) >
   # balance(防垄断换人) > cooldown(闲置最久) > random(平局兜底)

@@ -2,6 +2,7 @@
 import asyncio
 
 from src.orchestrators.tts_orchestrator import registry
+from src.orchestrators.tts_orchestrator.dashscope_client import DashScopeTTSClient
 from src.orchestrators.tts_orchestrator.tts_orchestrator import TTSOrchestrator
 from src.shared.event_bus import EventBus
 from src.shared.events import TTS_AUDIO_READY, TTS_FAILED
@@ -101,3 +102,60 @@ def test_unknown_capability(tmp_path):
     orch, _ = _make(tmp_path)
     r = asyncio.run(orch.handle({"capability": "tts:unknown", "payload": {}}))
     assert r["ok"] is False
+
+
+class FakeDashScopeClient(DashScopeTTSClient):
+    """模拟 dashscope 客户端：synthesize(text, voice=None) 返回 2 元组（不调用父类构造）。"""
+
+    def __init__(self, audio=b"fake-dashscope", sample_rate=24000):
+        self.audio = audio
+        self.sample_rate = sample_rate
+        self.calls = 0
+
+    def synthesize(self, text, voice=None):
+        self.calls += 1
+        return self.audio, self.sample_rate
+
+
+def test_client_synthesize_adapter_dashscope_style():
+    """兜底适配：dashscope 客户端用 voice 参数、返回 2 元组，统一为 3 元组契约。"""
+    client = FakeDashScopeClient()
+    audio, sample_rate, fmt = TTSOrchestrator._client_synthesize(client, "你好", "yuki")
+    assert (audio, sample_rate, fmt) == (b"fake-dashscope", 24000, "wav")
+    assert client.calls == 1
+
+
+def test_client_synthesize_adapter_wusound_style():
+    """兜底适配：wusound 客户端用 voice_id、返回 3 元组（原样透传）。"""
+
+    class WusoundLike:
+        def synthesize(self, text, voice_id=None):
+            return b"a", 24000, "mp3"
+
+    audio, sample_rate, fmt = TTSOrchestrator._client_synthesize(WusoundLike(), "hi", "yuki")
+    assert (audio, sample_rate, fmt) == (b"a", 24000, "mp3")
+
+
+def test_synthesize_falls_back_to_dashscope_style():
+    """主引擎失败 → 兜底 dashscope 风格客户端成功 → 发布 audio_ready。"""
+    primary = FakeTTSClient(fail=True)
+    fallback = FakeDashScopeClient()
+    bus = EventBus()
+    bus.reset()
+    orch = TTSOrchestrator(event_bus=bus, client=primary,
+                           fallback_client=fallback,
+                           cache_dir=str(tmp_path_for_fallback()))
+    orch.start()
+    seen = {}
+    bus.subscribe(TTS_AUDIO_READY, lambda event, **kw: seen.update(kw))
+    r = asyncio.run(orch.handle({"capability": "tts:synthesize",
+                                 "payload": {"text": "兜底成功", "role": "yuki"}}))
+    assert r["ok"] is True
+    assert seen.get("audio_id")
+    assert fallback.calls == 1
+
+
+def tmp_path_for_fallback():
+    import tempfile
+    from pathlib import Path
+    return Path(tempfile.mkdtemp()) / "tts_cache"

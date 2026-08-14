@@ -163,7 +163,7 @@ class TTSOrchestrator:
             logger.debug("[TTSOrchestrator] 缓存命中: %s", key)
             return key, audio_path, self._duration_from_file(audio_path)
         try:
-            audio, sample_rate, fmt = client.synthesize(text, voice_id=voice)
+            audio, sample_rate, fmt = self._client_synthesize(client, text, voice)
         except Exception as e:
             logger.error("[TTSOrchestrator] 合成失败: %s", e)
             return None, None, 0
@@ -172,6 +172,14 @@ class TTSOrchestrator:
         logger.info("[TTSOrchestrator] 合成完成: %s (%d bytes, %dms, %s)",
                     key, len(audio), duration_ms, fmt)
         return key, audio_path, duration_ms
+
+    @staticmethod
+    def _client_synthesize(client, text: str, voice: str):
+        """适配两引擎差异：wusound 用 voice_id（返回 3 元组），dashscope 用 voice（2 元组）。"""
+        if isinstance(client, DashScopeTTSClient):
+            audio, sample_rate = client.synthesize(text, voice=voice)
+            return audio, sample_rate, "wav"
+        return client.synthesize(text, voice_id=voice)
 
     @staticmethod
     def _cache_key(text: str, voice: str) -> str:

@@ -7,6 +7,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="/frontend/assets/store.js"></script>
+<script src="/frontend/assets/state_sync.js"></script>
 <style>
 /* ============================================
    Future Scene · 设计令牌（复用 dashboard_new）
@@ -766,8 +768,7 @@ const BACKEND = {
 const SESSION_ID = 'assistant';               // 当前会话 ID
 const HISTORY_KEY = 'fs-chat-' + SESSION_ID;  // localStorage 键（按会话隔离）
 const MAX_HISTORY = 200;                      // 历史消息上限
-const WS_MAX_DELAY = 30000;                   // 重连最大间隔（30s）
-const WS_DELAYS = [1000, 2000, 4000, 8000, 16000, 30000]; // 指数退避序列
+const WS_MAX_DELAY = 30000;                   // 重连最大间隔（30s，state_sync 使用）
 const TIMEOUT_COMMAND = 300000;               // 指令超时放宽至 5 分钟（中转站不稳定）
 
 /* ---- SVG 图标库 ---- */
@@ -842,15 +843,11 @@ const ORCH_META = {
 const STATE = {
   currentView: 'chat',
   theme: localStorage.getItem('fs-assistant-theme') || 'dark',
-  wsConnected: false,
-  wsRetryCount: 0,
-  wsAuthFailed: false,
   eventLogCollapsed: false,
-  health: null, state: null, metrics: null,
-  orchHealth: {}, switches: {}, orchestrators: [],
   orchEventCount: {},   // 每个 domain 的事件计数
-  pendingCommands: [],  // 等待状态回执的指令队列
+  pendingCommands: [],  // 等待状态回执的指令队列（FIFO + command_id 关联）
   sending: false,
+  metricsBreaker: null, // 熔断器状态（/api/metrics 首屏一次拉取，快照不含该字段）
   schedules: JSON.parse(localStorage.getItem('fs-assistant-schedules') || '[]')
 };
 
@@ -939,7 +936,6 @@ $('btnMenu').addEventListener('click', () => {
 /* ============================================ API 封装 ============================================ */
 function apiUrl(path) { return BACKEND.base + path; }
 const API = {
-  ws: null, wsTimer: null,
   async get(path, timeout = 10000) {
     try {
       const resp = await fetch(apiUrl(path), { signal: AbortSignal.timeout(timeout) });
@@ -960,52 +956,6 @@ const API = {
     } catch (e) {
       return { ok: false, status: 0, data: null, error: e };
     }
-  },
-  /* ---------- WebSocket：指数退避自动重连 ---------- */
-  connectWS() {
-    if (STATE.wsAuthFailed) return;
-    const wsBase = BACKEND.ws || (BACKEND.base || location.origin).replace(/^http/, 'ws');
-    const url = wsBase + '/ws/events';
-    try { this.ws = new WebSocket(url); } catch { this._scheduleReconnect(); return; }
-    this.ws.onopen = () => {
-      STATE.wsRetryCount = 0;
-      STATE.wsConnected = true;
-      hideReconnectBanner();
-      setConnChip('online', '实时连接');
-      $('wsDot').className = 'status-dot green';
-      $('navWSEvents').style.display = '';
-      // 重连成功：重新订阅 = 已连接 /ws/events，刷新状态以补回遗漏
-      refreshState(false);
-      toast('WebSocket 已连接 /ws/events', 'success');
-    };
-    this.ws.onmessage = (e) => {
-      try { handleEvent(JSON.parse(e.data)); } catch {}
-    };
-    this.ws.onclose = (e) => {
-      STATE.wsConnected = false;
-      $('wsDot').className = 'status-dot red';
-      // 403 / 401：认证失败，停止重连
-      if (e.code === 1008 || e.code === 1003 || e.code === 1006 && this._closePayload && (this._closePayload.includes('401') || this._closePayload.includes('403'))) {
-        STATE.wsAuthFailed = true;
-        showReconnectBanner('认证失败，请重新登录（不再重连）');
-        setConnChip('offline', '认证失败');
-        return;
-      }
-      this._scheduleReconnect();
-    };
-    this.ws.onerror = () => { try { this.ws.close(); } catch {} };
-  },
-  _scheduleReconnect() {
-    if (STATE.wsAuthFailed || this.wsTimer) return;
-    const delay = WS_DELAYS[Math.min(STATE.wsRetryCount, WS_DELAYS.length - 1)];
-    STATE.wsRetryCount++;
-    const label = '连接断开，正在重连（第 ' + STATE.wsRetryCount + ' 次 · ' + Math.round(delay / 1000) + 's 后）…';
-    showReconnectBanner(label);
-    setConnChip('reconnecting', '连接中…');
-    this.wsTimer = setTimeout(() => {
-      this.wsTimer = null;
-      this.connectWS();
-    }, delay);
   }
 };
 function setConnChip(cls, text) {
@@ -1021,8 +971,12 @@ function hideReconnectBanner() {
   $('reconnectBanner').classList.remove('show');
 }
 
-/* ============================================ 事件处理 ============================================ */
+/* ============================================ 事件处理（数据源：store 订阅，已按 seq 过滤） ============================================ */
 const MAX_EVENTS = 50;
+const cidMap = {};     // command_id -> msgId（发送指令时建立关联）
+let streamMsgId = null; // 当前流式消息 id
+let streamBuf = '';     // 流式分片累积
+
 function handleEvent(msg) {
   if (!msg || !msg.type) return;
   const type = msg.type;
@@ -1043,7 +997,7 @@ function handleEvent(msg) {
   item.className = 'event-item ' + logCls;
   const payload = Object.keys(data).length ? JSON.stringify(data) : '';
   item.innerHTML =
-    '<div class="ei-head"><span class="ei-type" style="color:var(--accent)">' + esc(meta.label) + '</span><span class="ei-time">' + fmtTime() + '</span></div>' +
+    '<div class="ei-head"><span class="ei-type" style="color:var(--accent)">' + esc(meta.label) + '</span><span class="ei-time">' + fmtTime(data.ts) + '</span></div>' +
     '<div class="ei-body">' + esc(type) + (payload ? '<br>' + esc(payload.slice(0, 260)) : '') + '</div>';
   list.insertBefore(item, list.firstChild);
   while (list.children.length > MAX_EVENTS) list.removeChild(list.lastChild);
@@ -1053,28 +1007,74 @@ function handleEvent(msg) {
   // 调度官事件计数（按 domain）
   STATE.orchEventCount[meta.domain] = (STATE.orchEventCount[meta.domain] || 0) + 1;
 
-  // —— 指令状态回执（匹配 pendingCommands） ——
+  // —— 指令状态回执（command_id 优先精确匹配，FIFO 兜底） ——
+  const cid = data.command_id;
+  const findPending = () => {
+    if (cid && cidMap[cid]) {
+      const hit = STATE.pendingCommands.find(p => p.msgId === cidMap[cid]);
+      if (hit) return hit;
+    }
+    return null;
+  };
   if (type === 'commander:command_received') {
     // peek 不消费：received 标记送达，completed 才消费队列
-    const p = STATE.pendingCommands[0];
+    const p = findPending() || STATE.pendingCommands[0];
     if (p) updateMsgStatus(p.msgId, 'delivered');
+  } else if (type === 'commander:command_routed') {
+    const p = findPending() || STATE.pendingCommands[0];
+    if (p) updateMsgStatus(p.msgId, 'running');
   } else if (type === 'commander:command_completed') {
-    const p = STATE.pendingCommands.shift();
+    const p = findPending() || STATE.pendingCommands.shift();
     if (p) {
       updateMsgStatus(p.msgId, 'replied');
       // 事件先于 HTTP 到达时，直接渲染 AI 回复（避免回复丢失）
       renderReplyFromEvent(p, data.result);
     }
   } else if (type === 'commander:command_failed') {
-    const p = STATE.pendingCommands.shift();
+    const p = findPending() || STATE.pendingCommands.shift();
     if (p) updateMsgStatus(p.msgId, 'failed', 'backend');
   }
 
-  // —— 会话/开关事件：立即同步状态面板 ——
+  // —— LLM 流式：实时渲染分片（无分片字段时由 command_completed 兜底） ——
+  if (type === 'llm:stream_chunk') {
+    const chunkText = data.text || data.chunk || (typeof data.delta === 'string' ? data.delta : '');
+    const p = STATE.pendingCommands[0];
+    if (chunkText && p) {
+      if (streamMsgId !== p.msgId) { streamMsgId = p.msgId; streamBuf = ''; }
+      streamBuf += chunkText;
+      updateStreamBubble(p.msgId, streamBuf);
+    }
+  } else if (type === 'llm:responded') {
+    const p = STATE.pendingCommands[0];
+    if (p) {
+      const text = (streamMsgId === p.msgId && streamBuf) ? streamBuf : null;
+      renderReplyFromEvent(p, data.result || (text ? { reply: text } : null));
+    }
+    streamMsgId = null;
+    streamBuf = '';
+  }
+
+  // —— 会话/开关事件：store 状态已由 reducer 合并，重渲染状态面板 ——
   if (type === 'session:switched' || type === 'session:state_changed' ||
       type === 'switch:changed' || type === 'frontend:status_update') {
-    refreshState(false);
+    renderStatusPanel();
   }
+}
+/* 流式分片实时更新用户消息气泡下方的回复预览 */
+function updateStreamBubble(msgId, text) {
+  const row = document.querySelector('.msg[data-msg-id="' + msgId + '"]');
+  if (!row) return;
+  let bubble = row.querySelector('.bubble .stream-preview');
+  if (!bubble) {
+    const b = row.querySelector('.bubble');
+    if (!b) return;
+    bubble = document.createElement('div');
+    bubble.className = 'stream-preview';
+    bubble.style.cssText = 'margin-top:6px;font-size:12px;color:var(--ink-muted);white-space:pre-wrap;word-break:break-word';
+    b.appendChild(bubble);
+  }
+  bubble.innerHTML = esc(text) + '<span class="text-xs" style="color:var(--ink-dim)"> ▍</span>';
+  scrollChatBottom(false);
 }
 function toggleEventLog() {
   STATE.eventLogCollapsed = !STATE.eventLogCollapsed;
@@ -1155,6 +1155,7 @@ function buildMsgRow(m) {
   const statusMeta = {
     sending:   ['st-sending', '⏳ 发送中'],
     delivered: ['st-delivered', '✓ 已送达'],
+    running:   ['st-delivered', '⏳ 执行中'],
     replied:   ['st-replied', '✓✓ 已回复'],
     failed:    ['st-failed', '✗ 失败']
   }[m.status] || ['st-sending', '⏳ 发送中'];
@@ -1212,7 +1213,7 @@ function sendCommand(text, existingMsg) {
   }
   STATE.sending = true;
   $('chatSendBtn').disabled = true;
-  STATE.pendingCommands.push({ msgId: m.id, text: raw });
+  STATE.pendingCommands.push({ msgId: m.id, text: raw, cid: null });
 
   // 超时兜底：指令超时仍未回执则标记失败
   const failTimer = setTimeout(() => {
@@ -1252,6 +1253,13 @@ function sendCommand(text, existingMsg) {
     }
 
     const result = res.data || {};
+    // 关联 command_id：事件回执按 cid 精确匹配消息（不预测回复）
+    if (result.command_id) {
+      cidMap[result.command_id] = m.id;
+      STATE.pendingCommands.forEach(p => { if (p.msgId === m.id) p.cid = result.command_id; });
+      const cmds = store.getState().commands;
+      cmds[result.command_id] = { status: 'sent', raw: raw, error: null };
+    }
     if (result.ok === false) {
       STATE.pendingCommands = STATE.pendingCommands.filter(p => p.msgId !== m.id);
       updateMsgStatus(m.id, 'failed', 'backend');
@@ -1272,7 +1280,7 @@ function sendCommand(text, existingMsg) {
     const replyText = extractReplyText(result);
     const body = replyText !== null ? replyText : JSON.stringify(result, null, 2);
     appendMsg('assistant', '<span class="mb-ok">指令已执行</span><pre>' + esc(body.slice(0, 1500)) + '</pre>');
-    refreshState(false);
+    // UI 状态由 store 订阅驱动（state:changed / commander:*），此处不预测
   });
 }
 /* 从 command 响应/事件 result 中提取可读回复文本 */
@@ -1389,12 +1397,12 @@ function stopMic() {
   try { recorder.stop(); } catch {}
 }
 
-/* ============================================ 状态面板 & 数据同步 ============================================ */
+/* ============================================ 状态面板（数据源：store 快照） ============================================ */
 function renderStatusPanel() {
+  const s = store.getState();
   // 会话信息
-  const session = (STATE.state && STATE.state.session) || {};
-  const online = STATE.health !== null || STATE.state !== null;
-  setText('spConn', STATE.wsConnected ? 'WS 在线' : (online ? 'HTTP 在线' : '离线'));
+  const session = s.session || {};
+  setText('spConn', wsOnline ? 'WS 在线' : (s.version > 0 ? 'HTTP 在线' : '离线'));
   setText('spRole', session.role || '—');
   setText('spScene', session.scene || '—');
   setText('spSid', SESSION_ID);
@@ -1402,16 +1410,17 @@ function renderStatusPanel() {
   setText('topbarScene', session.scene || '—');
 
   // 调度官健康列表（可点击展开详情）
-  const names = STATE.orchestrators;
+  const names = s.orchestrators || [];
+  const watchdog = s.watchdog || {};
+  const switches = s.switches || {};
   if (names.length === 0) {
     $('spOrchList').innerHTML = '<div class="text-muted text-xs">后端不可达</div>';
   } else {
     $('spOrchList').innerHTML = names.map((n, i) => {
       const meta = ORCH_META[n] || { name: n, desc: '' };
-      const h = STATE.orchHealth[n] || 'unknown';
-      const enabled = STATE.switches[n] !== false;
+      const h = watchdog[n] || 'unknown';
+      const enabled = switches[n] !== false;
       const evCount = STATE.orchEventCount[EVENT_DOMAIN(n)] || 0;
-      const hDetail = STATE.orchDetail && STATE.orchDetail[n] ? JSON.stringify(STATE.orchDetail[n]) : '—';
       return '<div class="orch-item" id="orchItem-' + n + '">' +
         '<div class="oi-head" onclick="toggleOrchDetail(\'' + n + '\')">' +
         statusDot(h) + '<span class="oi-name">' + meta.name + '</span>' +
@@ -1421,7 +1430,7 @@ function renderStatusPanel() {
         '<div class="od-row"><span>健康状态</span><span class="od-val">' + h + '</span></div>' +
         '<div class="od-row"><span>开关状态</span><span class="od-val">' + (enabled ? '开启' : '关闭') + '</span></div>' +
         '<div class="od-row"><span>最近事件</span><span class="od-val">' + evCount + ' 条</span></div>' +
-        '<div class="od-row"><span>health 详情</span><span class="od-val" style="font-size:10px;word-break:break-all">' + esc(hDetail) + '</span></div>' +
+        '<div class="od-row"><span>health 详情</span><span class="od-val" style="font-size:10px;word-break:break-all">—</span></div>' +
         '<div style="margin-top:6px"><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();toggleOrch(\'' + n + '\',' + (!enabled) + ')">' + (enabled ? '停止' : '启用') + '</button></div>' +
         '</div></div>';
     }).join('');
@@ -1440,8 +1449,9 @@ function EVENT_DOMAIN(name) {
   return map[name] || name;
 }
 function renderCostCards() {
-  const cost = (STATE.metrics && STATE.metrics.cost) || {};
-  const breaker = (STATE.metrics && STATE.metrics.circuit_breaker) || {};
+  const s = store.getState();
+  const cost = s.cost || {};
+  const breaker = STATE.metricsBreaker || {};
   const todayCost = cost.today_cost !== undefined ? cost.today_cost : cost.total_cost;
   setText('costToday', todayCost !== undefined ? '¥' + Number(todayCost).toFixed(4) : '—');
   setText('costCalls', cost.total_calls !== undefined ? String(cost.total_calls) : '—');
@@ -1449,103 +1459,41 @@ function renderCostCards() {
   const breakerEl = $('costBreaker');
   breakerEl.textContent = tripped ? '已熔断' : '正常';
   breakerEl.className = 'ci-value ' + (tripped ? 'bad' : '');
-  const healthy = STATE.orchestrators.filter(n => (STATE.orchHealth[n] || 'unknown') === 'ok').length;
-  setText('costHealthy', healthy + '/' + STATE.orchestrators.length);
+  const healthy = (s.orchestrators || []).filter(n => (s.watchdog[n] || 'unknown') === 'ok').length;
+  setText('costHealthy', healthy + '/' + (s.orchestrators || []).length);
 }
 function showSyncToast() {
   const el = $('syncToast');
   el.style.display = 'block';
   setTimeout(() => { el.style.display = 'none'; }, 2000);
 }
-/* 状态同步：拉取 /api/state + /api/metrics */
-let stateLoading = false;
-async function refreshState(showErrors = true) {
-  if (stateLoading) return;
-  stateLoading = true;
-  try {
-    const [h, s] = await Promise.all([
-      API.get('/api/health'),
-      API.get('/api/state')
-    ]);
-    const healthOk = h.ok && h.data;
-    const stateOk = s.ok && s.data;
-    if (healthOk) {
-      STATE.health = h.data;
-      if (Array.isArray(h.data.orchestrators) && h.data.orchestrators.length) {
-        STATE.orchestrators = h.data.orchestrators;
-      }
-    }
-    if (stateOk) {
-      STATE.state = s.data;
-      if (s.data.switches) STATE.switches = s.data.switches;
-      if (Array.isArray(s.data.orchestrators) && s.data.orchestrators.length) {
-        STATE.orchestrators = s.data.orchestrators;
-      }
-      // degradation 中可能含调度官级别信息
-      if (s.data.degradation) {
-        const d = s.data.degradation;
-        if (d.levels) STATE.orchHealth = Object.assign({}, STATE.orchHealth, d.levels);
-        if (d.details) STATE.orchDetail = d.details;
-      }
-    }
-    if (!healthOk && !stateOk) {
-      // 数据加载失败 → 显示重试
-      setConnChip('offline', '后端离线');
-      if (showErrors) {
-        $('spOrchList').innerHTML =
-          '<div class="retry-box"><div class="rb-tip">数据加载失败</div>' +
-          '<button class="btn btn-primary btn-sm" onclick="refreshState(true)">点击重试</button></div>';
-      }
-      return;
-    }
-    setConnChip('online', STATE.wsConnected ? 'HTTP+WS 在线' : 'HTTP 在线');
-    renderStatusPanel();
-  } finally {
-    stateLoading = false;
-  }
+/* 状态同步：由 store 驱动（去掉 /api/state、/api/metrics 轮询） */
+function refreshState() {
+  renderStatusPanel();
+  return Promise.resolve();
 }
 async function refreshMetrics() {
+  // 仅首屏/手动拉取一次：快照不含 circuit_breaker，熔断器状态单独取
   const res = await API.get('/api/metrics');
   if (res.ok && res.data) {
-    STATE.metrics = res.data;
-    if (res.data.watchdog) STATE.orchHealth = Object.assign({}, STATE.orchHealth, res.data.watchdog);
+    STATE.metricsBreaker = res.data.circuit_breaker || null;
     renderCostCards();
-  }
-}
-/* 状态一致性校验：每 30 秒对比后端，不一致自动修正 */
-async function verifyStateSync() {
-  const res = await API.get('/api/state');
-  if (!res.ok || !res.data) return;
-  const backend = res.data;
-  const needFix =
-    (backend.switches && JSON.stringify(backend.switches) !== JSON.stringify(STATE.switches)) ||
-    (backend.session && backend.session.role !== (STATE.state && STATE.state.session && STATE.state.session.role)) ||
-    (backend.session && backend.session.scene !== (STATE.state && STATE.state.session && STATE.state.session.scene));
-  if (needFix) {
-    const prev = JSON.stringify(STATE.switches);
-    STATE.state = backend;
-    if (backend.switches) STATE.switches = backend.switches;
-    renderStatusPanel();
     renderOverview();
-    renderConfig();
-    showSyncToast();
-    toast('检测到状态不一致，已自动修正', 'info');
   }
 }
 
 /* ============================================ 调度官调试 ============================================ */
-async function loadModules(forceToast) {
+function loadModules(forceToast) {
   const grid = $('orchGrid');
-  grid.innerHTML = '<div class="text-muted text-sm">加载中…</div>';
-  await refreshState(false);
-  const names = STATE.orchestrators;
+  const s = store.getState();
+  const names = s.orchestrators || [];
   if (names.length === 0) {
     grid.innerHTML = '<div class="text-muted text-sm" style="grid-column:1/-1;text-align:center;padding:30px">后端不可达或未装配调度官注册表<br><button class="btn btn-primary btn-sm mt-12" onclick="loadModules(true)">点击重试</button></div>';
     if (forceToast) toast('后端不可达', 'warning');
     return;
   }
-  const health = STATE.orchHealth;
-  const switches = STATE.switches;
+  const health = s.watchdog || {};
+  const switches = s.switches || {};
   const healthyCount = names.filter(n => (health[n] || 'unknown') === 'ok').length;
   setText('orchSummary', '共 ' + names.length + ' 个调度官 · ' + healthyCount + ' 个健康 · ' +
     Object.values(switches).filter(v => v).length + ' 个开关开启');
@@ -1572,23 +1520,23 @@ function sendCommandText(text) {
   navTo('chat');
   sendCommand();
 }
-/* 开关操作：失败自动回滚 */
+/* 开关操作：只发事件不预测，等待 state:changed 确认后由 store 订阅重渲染 */
 async function toggleOrch(name, enable) {
-  const prev = STATE.switches[name];
-  // 乐观更新
-  STATE.switches[name] = enable;
-  renderStatusPanel();
   const res = await API.post('/api/switch/' + encodeURIComponent(name), { enabled: enable });
-  if (res.ok && res.data && res.data.ok !== false) {
-    STATE.switches[name] = enable;
-    toast('调度官 ' + name + ' 已' + (enable ? '启用' : '停止'), enable ? 'success' : 'info');
+  if (res.ok && res.data) {
+    if (res.data.command_id) {
+      const cmds = store.getState().commands;
+      cmds[res.data.command_id] = { status: 'sent', raw: name, error: null };
+    }
+    if (res.data.ok === false) {
+      toast('开关操作失败: ' + (res.data.error || ''), 'error');
+    } else {
+      toast('开关指令已提交，等待后端确认…', 'info');
+    }
   } else {
-    // 失败回滚
-    STATE.switches[name] = prev;
-    toast('开关操作失败，已回滚到操作前状态', 'warning');
+    toast('开关操作失败（网络错误）', 'error');
   }
-  renderStatusPanel();
-  loadModules(false);
+  // 不直接改 UI！等待 state:changed 事件（订阅统一重渲染状态面板与模块列表）
 }
 
 /* ============================================ 日程 ============================================ */
@@ -1702,14 +1650,14 @@ function removeSchedule(idx) {
 async function loadOverview() {
   $('overviewSwitches').innerHTML = '<div class="text-muted text-sm">加载中…</div>';
   $('overviewWatchdog').innerHTML = '<div class="text-muted text-sm">加载中…</div>';
-  await refreshState(false);
   await refreshMetrics();
   renderOverview();
 }
 function renderOverview() {
-  const switches = STATE.switches;
-  const names = STATE.orchestrators;
-  const health = STATE.orchHealth;
+  const s = store.getState();
+  const switches = s.switches || {};
+  const names = s.orchestrators || [];
+  const health = s.watchdog || {};
   const swKeys = Object.keys(switches);
   const onCount = swKeys.filter(k => switches[k]).length;
   const healthyCount = names.filter(n => (health[n] || 'unknown') === 'ok').length;
@@ -1719,11 +1667,11 @@ function renderOverview() {
   setText('statSwSub', '开关已启用');
   setText('statHealthy', healthyCount + '/' + (names.length || 0));
   setText('statHealthySub', 'Watchdog 健康');
-  const cost = (STATE.metrics && STATE.metrics.cost) || {};
+  const cost = s.cost || {};
   const todayCost = cost.today_cost !== undefined ? cost.today_cost : cost.total_cost;
   setText('statCost', todayCost !== undefined ? '¥' + Number(todayCost).toFixed(4) : '—');
   setText('statCostSub', '今日成本 · 调用 ' + (cost.total_calls || 0) + ' 次');
-  const breaker = (STATE.metrics && STATE.metrics.circuit_breaker) || {};
+  const breaker = STATE.metricsBreaker || {};
   if (breaker.tripped || breaker.state === 'open') setText('statCostSub', '⚠ 成本熔断已触发');
 
   if (swKeys.length === 0) {
@@ -1743,7 +1691,7 @@ function renderOverview() {
         '<span class="sw-val ' + (h === 'ok' ? 'on' : 'off') + '">' + healthLabel(h) + '</span></div>';
     }).join('');
   }
-  const session = (STATE.state && STATE.state.session) || {};
+  const session = s.session || {};
   const keys = [['session_id', '会话 ID'], ['role', '当前角色'], ['scene', '场景'], ['live_mode', '直播模式'], ['started_at', '开始时间']];
   const rows = keys.filter(([k]) => session[k] !== undefined)
     .map(([k, label]) => '<tr><td style="color:var(--ink-muted);width:40%">' + label + '</td>' +
@@ -1767,7 +1715,8 @@ const SCENES = [
   { name: 'community_reply', desc: '社区互动回复' }
 ];
 function renderConfig() {
-  const curRole = (STATE.state && STATE.state.session && STATE.state.session.role) || 'lumi';
+  const s = store.getState();
+  const curRole = (s.session && s.session.role) || 'lumi';
   $('roleGrid').innerHTML = ROLES.map(r => {
     const active = r.id === curRole;
     return '<div class="role-card">' +
@@ -1779,7 +1728,7 @@ function renderConfig() {
       '<button class="btn btn-primary btn-sm" ' + (active ? 'disabled' : '') + ' onclick="switchRole(\'' + r.id + '\')">切换</button>' +
       '</div></div>';
   }).join('');
-  const curScene = (STATE.state && STATE.state.session && STATE.state.session.scene) || '';
+  const curScene = (s.session && s.session.scene) || '';
   $('sceneGrid').innerHTML = SCENES.map(s =>
     '<div class="scene-card' + (s.name === curScene ? ' selected' : '') + '" onclick="selectScene(this, \'' + s.name + '\')">' +
     '<div class="sc-name">' + s.name + '</div><div class="sc-desc">' + s.desc + '</div></div>'
@@ -1822,24 +1771,56 @@ $('chatInput').addEventListener('input', e => {
 function updateClock() { setText('topbarClock', fmtTime()); }
 setInterval(updateClock, 1000);
 
+/* ============================================ Store + 同步（单一数据源） ============================================ */
+let wsOnline = false; // WS 连接状态（state_sync onStatusChange 更新）
+
+const store = FSStore.createStore(FSStore.makeReducer(), FSStore.initialState());
+const sync = new FSStateSync(store, {
+  onStatusChange: function (st) {
+    wsOnline = (st === 'online');
+    if (st === 'online') {
+      hideReconnectBanner();
+      setConnChip('online', '实时连接');
+      $('wsDot').className = 'status-dot green';
+      $('navWSEvents').style.display = '';
+      renderStatusPanel();
+    } else if (st === 'reconnecting') {
+      setConnChip('reconnecting', '重连中…');
+      $('wsDot').className = 'status-dot yellow';
+      showReconnectBanner('连接断开，正在重连…');
+    } else if (st === 'connecting') {
+      setConnChip('reconnecting', '连接中…');
+      $('wsDot').className = 'status-dot gray';
+    } else {
+      setConnChip('offline', '已断开');
+      $('wsDot').className = 'status-dot red';
+    }
+  }
+});
+
+/* 订阅：快照驱动状态面板；普通事件驱动日志/命令回执/流式（store 已按 seq 合并） */
+store.subscribe('*', function (state, event) {
+  if (event.type === 'state:changed') {
+    renderStatusPanel();
+    renderOverview();
+    renderConfig();
+    if (STATE.currentView === 'modules') loadModules(false);
+    return;
+  }
+  handleEvent(event);
+});
+
 /* ============================================ 初始化 ============================================ */
 async function init() {
   applyTheme(STATE.theme);
   setText('chatSessionLabel', '会话：' + SESSION_ID);
-  renderHistory();               // 从 localStorage 恢复对话
+  renderHistory();               // 从 localStorage 恢复对话（单标签）
   renderSchedules();             // 恢复日程
-  await refreshState(true);      // 页面加载自动拉取系统状态
-  refreshMetrics();              // 拉取成本数据
+  renderStatusPanel();
   renderOverview();
   renderConfig();
-  API.connectWS();
-
-  // 30 秒状态校验（一致性）
-  setInterval(verifyStateSync, 30000);
-  // 60 秒成本刷新
-  setInterval(refreshMetrics, 60000);
-  // 15 秒状态兜底刷新
-  setInterval(() => refreshState(false), 15000);
+  refreshMetrics();              // 首屏一次：熔断器状态（快照不含该字段）
+  sync.init();                   // 首屏拉取 /api/state → 建 WS；断线/重连自动补数
 }
 init();
 </script>

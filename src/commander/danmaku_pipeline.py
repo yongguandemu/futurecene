@@ -18,7 +18,7 @@
 2. 配置契约：无独立配置；依赖注入 llm/tts/safety/memory 调度官实例、switch_manager 与 SessionContext（角色实时读取）
 3. 输入契约：订阅 danmaku:received（content/user_name）；! 前缀系统命令跳过；execute_with(text, role, system_prompt, turn_context, user_name) 参数化入口
 4. 输出契约：发布 FRONTEND_SUBTITLE_UPDATE/AUDIENCE_FILTERED/SPEECH_COMPLETED；调用各调度官 handle（safety/memory/llm/tts）；触发 tts:audio_ready 供 Live2D 订阅；字幕/LLM/TTS/记忆/发言完成事件均携带发言角色（默认取 SessionContext 实时值，未注入回退 yuki）
-5. 依赖声明：asyncio、logging、typing、shared.events
+5. 依赖声明：asyncio、logging、typing、shared.events、shared.decision_log
 6. 错误定义：各环节失败仅记录日志并跳过（不级联）；LLM 未注入跳过
 7. 生命周期方法：start()/stop()
 8. 领域状态说明：_started 标记、注入的调度官引用（_llm/_tts/_safety/_memory）
@@ -81,6 +81,10 @@ class DanmakuPipeline:
         text = (text or "").strip()
         if not text:
             return {"ok": False, "error": "text 必填"}
+        if self._llm is None:
+            # 入口守卫：LLM 未注入直接拒绝（避免 _chat 内 AttributeError 被吞后
+            # 误记 llm_empty_reply；_on_danmaku 既有守卫保留，双保险）
+            return {"ok": False, "error": "llm-not-injected"}
         try:
             return await self._process(text, role, system_prompt,
                                        turn_context or [], user_name)
@@ -221,8 +225,8 @@ class DanmakuPipeline:
             logger.error("[DanmakuPipeline] 记忆检索失败: %s", e)
             return []
 
-    async def _chat(self, text: str, history, role: str = "", system_prompt: str = "",
-                    turn_context=None) -> str:
+    async def _chat(self, text: str, history: List[Dict[str, str]], role: str = "",
+                    system_prompt: str = "", turn_context=None) -> str:
         try:
             payload = {"text": text, "role": role, "history": history}
             if system_prompt:

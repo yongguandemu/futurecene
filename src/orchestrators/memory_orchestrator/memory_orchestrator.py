@@ -6,7 +6,7 @@
 # 模块内容清单（8 项契约）
 1. 模块身份标识：memory 调度官 · memory_orchestrator · 能力 memory:store / retrieve / consolidate / get_history
 2. 配置契约：db_path（可选，长期记忆 SQLite 路径）
-3. 输入契约：handle(command) 接收 {"capability": "memory:*", "payload": {"content","query","session_id","k","mode","limit"}}
+3. 输入契约：handle(command) 接收 {"capability": "memory:*", "payload": {"content","query","session_id","character_id","k","mode","limit"}}；character_id 可选，用于按角色分桶隔离记忆（与 session_id 组合为 bucket，缺省沿用旧版全局桶行为）
 4. 输出契约：返回 {"ok": bool, "data": {...}, "error": str|null}；发布 MEMORY_STORED / MEMORY_RETRIEVED / MEMORY_CONSOLIDATED
 5. 依赖声明：registry、retriever、long_term、short_term、src.shared.events
 6. 错误定义：content 为空返回 {"ok": false, "error": "content 必填"}
@@ -88,7 +88,7 @@ class MemoryOrchestrator:
         session_id = payload.get("session_id", "")
         bucket = self._bucket(session_id, payload.get("character_id", ""))
         mode = payload.get("mode", "hybrid")  # keyword / vector / hybrid（默认）
-        short_entries = self._short.get_history(bucket) if session_id else self._short.all_entries()
+        short_entries = self._short.get_history(bucket) if bucket else self._short.all_entries()
         long_entries = self._long.retrieve(query, k) if query else []
         if query:
             if mode == "vector":
@@ -111,13 +111,13 @@ class MemoryOrchestrator:
         """短期 → 长期固化（规格书 5.5：由指挥官触发）。"""
         session_id = payload.get("session_id", "")
         bucket = self._bucket(session_id, payload.get("character_id", ""))
-        entries = self._short.get_history(bucket) if session_id else self._short.all_entries()
+        entries = self._short.get_history(bucket) if bucket else self._short.all_entries()
         count = 0
         for entry in entries:
             self._long.store(content=entry["content"], role=entry["role"],
                              session_id=entry["session_id"])
             count += 1
-        self._short.clear(bucket or None)
+        self._short.clear(bucket or None)  # 清空与读取同键：bucket 存在清桶，否则清全部
         self._event_bus.publish(MEMORY_CONSOLIDATED, count=count)
         return {"ok": True, "data": {"consolidated": count}, "error": None}
 

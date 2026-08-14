@@ -79,6 +79,9 @@ def test_unknown_capability(tmp_path):
 def test_memory_bucket_by_character():
     orch = MemoryOrchestrator(EventBus())
     orch.start()
+    stored_sessions = []
+    orch._event_bus.subscribe(MEMORY_STORED,
+                              lambda event, **kw: stored_sessions.append(kw.get("session_id")))
     asyncio.run(orch.handle({"capability": "memory:store",
                              "payload": {"content": "Yuki 的话题", "role": "assistant",
                                          "session_id": "default", "character_id": "yuki"}}))
@@ -90,3 +93,20 @@ def test_memory_bucket_by_character():
                                               "character_id": "yuki", "limit": 20}}))
     texts = [e["content"] for e in r1["data"]["history"]]
     assert "Yuki 的话题" in texts and "Lilith 的话题" not in texts
+    # 反向断言：lilith 桶不含 Yuki 内容
+    r2 = asyncio.run(orch.handle({"capability": "memory:get_history",
+                                  "payload": {"session_id": "default",
+                                              "character_id": "lilith", "limit": 20}}))
+    texts2 = [e["content"] for e in r2["data"]["history"]]
+    assert "Lilith 的话题" in texts2 and "Yuki 的话题" not in texts2
+    # 回归断言：不传 character_id 时行为与旧版一致（按 session 全局桶存取）
+    asyncio.run(orch.handle({"capability": "memory:store",
+                             "payload": {"content": "无角色的话题", "role": "assistant",
+                                         "session_id": "default"}}))
+    r3 = asyncio.run(orch.handle({"capability": "memory:get_history",
+                                  "payload": {"session_id": "default", "limit": 20}}))
+    texts3 = [e["content"] for e in r3["data"]["history"]]
+    assert "无角色的话题" in texts3
+    assert "Yuki 的话题" not in texts3 and "Lilith 的话题" not in texts3
+    # MEMORY_STORED 事件 session_id 保持原值（不含 ":" 后缀）
+    assert stored_sessions == ["default", "default", "default"]

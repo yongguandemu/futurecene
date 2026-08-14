@@ -169,6 +169,72 @@ html, body { height: 100%; overflow: hidden; }
 .card-body { padding: 14px 16px; }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 
+/* ============ 通用工具类（由 assistant 迁入） ============ */
+.flex { display: flex; } .between { justify-content: space-between; } .center { align-items: center; }
+.gap-8 { gap: 8px; } .gap-12 { gap: 12px; }
+.mb-8 { margin-bottom: 8px; } .mb-12 { margin-bottom: 12px; } .mb-16 { margin-bottom: 16px; }
+.text-muted { color: var(--ink-muted); } .text-sm { font-size: 12px; } .text-xs { font-size: 11px; }
+.section-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--ink-dim); margin: 18px 0 10px; }
+.field-label { font-size: 11px; color: var(--ink-muted); margin-bottom: 5px; display: block; font-weight: 600; }
+.select { width: 100%; background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius); padding: 7px 10px; font-size: 13px; color: var(--ink-bright); font-family: inherit; transition: border var(--transition-fast); }
+.select:focus { border-color: var(--border-focus); outline: none; }
+.checkbox input { accent-color: var(--accent-icon); }
+.tag { font-size: 10px; padding: 2px 8px; border-radius: var(--radius-xs); font-weight: 600; display: inline-block; }
+.tag-scene { background: var(--info-bg); color: var(--info); }
+.badge-green { background: var(--success-bg); color: var(--success); }
+.badge-yellow { background: var(--warning-bg); color: var(--warning); }
+.badge-red { background: var(--danger-bg); color: var(--danger); }
+
+/* ============ 日程设置（由 assistant 迁入） ============ */
+.timeline { display: flex; flex-direction: column; gap: 8px; }
+.timeline-item {
+  display: grid; grid-template-columns: 90px 1fr auto; gap: 14px; align-items: center;
+  padding: 12px 16px; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius);
+  transition: all var(--transition); position: relative; overflow: hidden;
+}
+.timeline-item::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: transparent; transition: background var(--transition); }
+.timeline-item:hover { border-color: var(--accent-icon); transform: translateX(2px); }
+.timeline-item:hover::before { background: var(--accent-icon); }
+.timeline-item.current { border-color: var(--danger); background: linear-gradient(90deg, var(--danger-bg), var(--bg-card)); }
+.timeline-item.current::before { background: var(--danger); }
+.timeline-item .tl-time { font-family: var(--font-mono); font-size: 14px; font-weight: 700; color: var(--ink-bright); }
+.timeline-item .tl-time .dur { font-size: 10px; color: var(--ink-dim); font-weight: 400; display: block; }
+.timeline-item .tl-body .tl-title { font-size: 13px; font-weight: 600; color: var(--ink-bright); margin-bottom: 4px; }
+.timeline-item .tl-body .tl-meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.timeline-item .tl-roles { display: flex; gap: 4px; }
+
+/* ============ 配置管理（由 assistant 迁入） ============ */
+.role-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.role-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-card); overflow: hidden; }
+.role-card .rc-head { display: flex; align-items: center; gap: 12px; padding: 14px 16px; }
+.role-card .rc-avatar { width: 44px; height: 44px; border-radius: var(--radius); display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 700; color: #fff; flex-shrink: 0; }
+.role-card .rc-avatar.lumi { background: linear-gradient(135deg, var(--lumi-color), #3b82f6); }
+.role-card .rc-avatar.lilith { background: linear-gradient(135deg, var(--lilith-color), #b91c1c); }
+.role-card .rc-info { flex: 1; }
+.role-card .rc-name { font-size: 14px; font-weight: 700; color: var(--ink-bright); }
+.role-card .rc-tag { font-size: 11px; color: var(--ink-muted); }
+.role-card .rc-body { padding: 0 16px 14px; border-top: 1px solid var(--border-subtle); }
+.scene-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.scene-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-card); padding: 16px; cursor: pointer; transition: all var(--transition); position: relative; overflow: hidden; }
+.scene-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, var(--accent3), var(--accent-icon)); opacity: 0; transition: opacity var(--transition); }
+.scene-card:hover { border-color: var(--accent-icon); transform: translateY(-3px); box-shadow: var(--shadow-md); }
+.scene-card:hover::before { opacity: 1; }
+.scene-card.selected { border-color: var(--accent-icon); box-shadow: var(--shadow-glow-accent); }
+.scene-card.selected::before { opacity: 1; }
+.scene-card .sc-name { font-family: var(--font-mono); font-size: 13px; font-weight: 700; color: var(--accent); margin-bottom: 4px; }
+.scene-card .sc-desc { font-size: 12px; color: var(--ink-muted); }
+
+/* ============ 模态框（由 assistant 迁入） ============ */
+.modal-overlay { position: fixed; inset: 0; background: var(--bg-overlay); backdrop-filter: blur(6px); display: none; align-items: center; justify-content: center; z-index: var(--z-overlay); }
+.modal-overlay.show { display: flex; animation: fadeIn var(--transition); }
+.modal { width: 500px; max-width: 92vw; max-height: 88vh; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); display: flex; flex-direction: column; overflow: hidden; }
+.modal-head { padding: 16px 22px; border-bottom: 1px solid var(--border-subtle); display: flex; align-items: center; justify-content: space-between; }
+.modal-head .m-title { font-size: 15px; font-weight: 700; color: var(--ink-bright); }
+.modal-close { width: 24px; height: 24px; border: none; background: transparent; color: var(--ink-muted); cursor: pointer; font-size: 18px; display: flex; align-items: center; justify-content: center; border-radius: var(--radius-xs); }
+.modal-close:hover { background: var(--bg-hover); color: var(--ink-bright); }
+.modal-body { flex: 1; overflow-y: auto; padding: 18px 22px; display: flex; flex-direction: column; gap: 12px; }
+.modal-foot { padding: 12px 22px; border-top: 1px solid var(--border-subtle); display: flex; justify-content: flex-end; gap: 8px; align-items: center; }
+
 /* ============ 智能助手：对话工作台（由 assistant 迁入） ============ */
 .chat-wrap { display: grid; grid-template-columns: 1fr 300px; width: 100%; flex: 1; min-height: 0; }
 .chat-main { display: flex; flex-direction: column; min-width: 0; }
@@ -287,10 +353,15 @@ html, body { height: 100%; overflow: hidden; }
 @media (max-width: 1280px) {
   .chat-wrap { grid-template-columns: 1fr 260px; }
 }
+@media (max-width: 1024px) {
+  .scene-grid { grid-template-columns: 1fr 1fr; }
+}
 @media (max-width: 768px) {
   .chat-wrap { grid-template-columns: 1fr; }
   .chat-side { border-left: none; border-bottom: 1px solid var(--border); order: -1; }
   .msg { max-width: 92%; }
+  .scene-grid { grid-template-columns: 1fr; }
+  .role-grid { grid-template-columns: 1fr; }
 }
 </style>
 </head>
@@ -454,8 +525,71 @@ html, body { height: 100%; overflow: hidden; }
       </div>
     </section>
 
+    <!-- 日程设置（由 assistant view-schedule 迁入） -->
+    <section class="view" id="view-schedule">
+      <div class="view-head">
+        <div>
+          <h2>日程设置</h2>
+          <div class="sub">直播日程管理 · 新增/编辑将生成自然语言指令发送给指挥官</div>
+        </div>
+      </div>
+      <div class="flex between center mb-12">
+        <div class="muted" id="scheduleCount">共 0 项排期</div>
+        <button class="btn primary sm" onclick="showScheduleModal()">添加排期</button>
+      </div>
+      <div class="timeline" id="scheduleList"></div>
+    </section>
+
+    <!-- 配置管理（由 assistant view-config 迁入） -->
+    <section class="view" id="view-config">
+      <div class="view-head">
+        <div>
+          <h2>配置管理</h2>
+          <div class="sub">角色配置 · 场景配置 · 修改操作将生成自然语言指令发送给指挥官</div>
+        </div>
+      </div>
+      <div class="section-label">角色配置</div>
+      <div class="role-grid" id="roleGrid"></div>
+      <div class="section-label" style="margin-top:20px">场景配置</div>
+      <div class="scene-grid" id="sceneGrid"></div>
+    </section>
+
     <!-- 系统状态视图已并入"系统总览"（view-master），见 Task 4 -->
   </main>
+</div>
+
+<!-- ============ 日程模态框（由 assistant scheduleModal 迁入） ============ -->
+<div class="modal-overlay" id="scheduleModal">
+  <div class="modal">
+    <div class="modal-head"><span class="m-title">添加直播排期</span><button class="modal-close" onclick="closeScheduleModal()">&times;</button></div>
+    <div class="modal-body">
+      <div><label class="field-label">开始时间 <span class="dim">（HH:MM）</span></label><input class="input mono" id="schedTime" placeholder="20:00"></div>
+      <div><label class="field-label">时长 <span class="dim">（分钟）</span></label><input class="input mono" id="schedDur" type="number" value="60" min="15" step="15"></div>
+      <div><label class="field-label">直播标题</label><input class="input" id="schedTitle" placeholder="如：晚间音乐分享会"></div>
+      <div><label class="field-label">场景</label>
+        <select class="select" id="schedScene">
+          <option value="pure_chat">pure_chat · 纯聊天</option>
+          <option value="minecraft_chat">minecraft_chat · MC 实况</option>
+          <option value="co_op_gaming">co_op_gaming · 协作游戏</option>
+          <option value="music_sharing">music_sharing · 音乐分享</option>
+          <option value="community_reply">community_reply · 社区互动</option>
+        </select>
+      </div>
+      <div><label class="field-label">角色</label>
+        <div class="flex gap-12">
+          <label class="checkbox" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--ink);cursor:pointer"><input type="checkbox" id="schedRoleLumi" checked style="accent-color:var(--accent-icon)"> Lumi</label>
+          <label class="checkbox" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--ink);cursor:pointer"><input type="checkbox" id="schedRoleLilith" style="accent-color:var(--accent-icon)"> Lilith</label>
+        </div>
+      </div>
+      <div style="background:var(--bg-input);border:1px dashed var(--border);border-radius:var(--radius);padding:10px 12px;font-size:12px;color:var(--ink-muted)">
+        提交后将生成指令：<span class="mono" id="schedPreview" style="color:var(--accent)">—</span>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeScheduleModal()">取消</button>
+      <button class="btn primary" id="schedSubmitBtn" onclick="submitSchedule()">提交指令</button>
+    </div>
+  </div>
 </div>
 
 <script>

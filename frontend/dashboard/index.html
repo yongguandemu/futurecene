@@ -568,7 +568,11 @@ html, body { height: 100%; overflow: hidden; }
   function pushEventFromStore(event) {
     var dataObj = Object.assign({}, event);
     delete dataObj.type; delete dataObj.seq; delete dataObj.ts;
-    pageEvents.unshift({ time: fmtTime(event.ts), type: event.type, data: JSON.stringify(dataObj) });
+    var item = { time: fmtTime(event.ts), type: event.type, data: JSON.stringify(dataObj), seq: event.seq || 0 };
+    // 按 seq 降序插入（事件到达可能与 seq 序不一致，以后端事件序为准）
+    var idx = 0;
+    while (idx < pageEvents.length && pageEvents[idx].seq > item.seq) idx++;
+    pageEvents.splice(idx, 0, item);
     if (pageEvents.length > MAX_EVENTS) pageEvents.pop();
     $("eventCount").textContent = pageEvents.length;
     var badge = $("navEventCount");

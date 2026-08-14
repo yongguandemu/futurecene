@@ -46,6 +46,7 @@ def test_danmaku_triggers_llm_and_subtitle():
     bus.subscribe(FRONTEND_SUBTITLE_UPDATE, lambda event, **kw: seen.update(kw))
     _publish_danmaku(bus)
     assert llm.calls and llm.calls[0]["capability"] == "llm:chat"
+    seen.pop("seq", None)  # seq 为事件元数据，不属于业务载荷
     assert seen == {"text": "你好呀", "role": "yuki", "user_name": "观众"}
 
 

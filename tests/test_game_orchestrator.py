@@ -82,6 +82,7 @@ def test_commentary_publishes_request():
     r = asyncio.run(orch.handle({"capability": "game:commentary",
                                  "payload": {"scene_state": "对白"}}))
     assert r["ok"] is True
+    seen.pop("seq", None)  # seq 为事件元数据，不属于业务载荷
     assert seen == {"scene_state": "对白"}
 
 

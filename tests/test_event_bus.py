@@ -17,6 +17,7 @@ def test_publish_subscribe_delivers_payload(clean_bus):
     received = {}
     clean_bus.subscribe(COMMAND_RECEIVED, lambda event, **kw: received.update(kw))
     clean_bus.publish_sync(COMMAND_RECEIVED, text="你好")
+    received.pop("seq", None)  # seq 为事件元数据，不属于业务载荷
     assert received == {"text": "你好"}
 
 

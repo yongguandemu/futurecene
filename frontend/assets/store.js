@@ -85,11 +85,11 @@
         }
       }
 
-      // 会话/开关增量（无快照时的兜底）
-      if (type === 'switch:changed' && event.name !== undefined) {
+      // 会话/开关增量（快照之后的状态事件才应用；seq <= snapshotSeq 的状态已被快照包含）
+      if (type === 'switch:changed' && event.name !== undefined && seq > next.snapshotSeq) {
         next.switches = Object.assign({}, next.switches, { [event.name]: event.enabled });
       }
-      if (type === 'session:switched' && event.role) {
+      if (type === 'session:switched' && event.role && seq > next.snapshotSeq) {
         next.session = Object.assign({}, next.session, { role: event.role });
       }
       return next;

@@ -178,7 +178,7 @@ class EventBus:
                                  seq=self._seq_counter)
         for handler in handlers:
             try:
-                handler.callback(event=event, **data)
+                handler.callback(event=event, seq=record.seq, **data)
                 record.handler_results.append(f"{handler.name}: OK")
             except Exception as e:
                 record.handler_results.append(f"{handler.name}: {e}")

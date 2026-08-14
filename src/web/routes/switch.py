@@ -12,6 +12,7 @@
 7. 生命周期方法：无（Blueprint 路由函数 switch()）
 8. 领域状态说明：无模块级状态；经 SwitchManager.set_manual 手动覆盖（优先级最高）
 """
+import uuid
 from flask import Blueprint, current_app, jsonify, request
 
 bp = Blueprint("switch", __name__, url_prefix="/api")
@@ -28,4 +29,5 @@ def switch(name):
         return jsonify({"ok": False, "error": "enabled 必填"}), 400
     switch_manager.set_manual(name, bool(data["enabled"]))
     return jsonify({"ok": True,
-                    "data": {"name": name, "enabled": switch_manager.is_enabled(name)}})
+                    "data": {"name": name, "enabled": switch_manager.is_enabled(name)},
+                    "command_id": uuid.uuid4().hex})

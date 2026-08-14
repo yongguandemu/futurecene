@@ -108,6 +108,7 @@ def test_handle_connect_publishes_event():
     result = asyncio.run(orch.handle({"capability": "bilibili:connect", "payload": {}}))
     assert result["ok"] is True
     assert result["data"] == {"connected": True}
+    seen.pop("seq", None)  # seq 为事件元数据，不属于业务载荷
     assert seen == {"room_id": ""}
 
 
@@ -124,6 +125,7 @@ def test_handle_disconnect():
     bus.subscribe(BILIBILI_DISCONNECTED, lambda event, **kw: seen.update(kw))
     result = asyncio.run(orch.handle({"capability": "bilibili:disconnect", "payload": {}}))
     assert result["ok"] is True
+    seen.pop("seq", None)  # seq 为事件元数据，不属于业务载荷
     assert seen == {}
 
 

@@ -84,11 +84,12 @@ def init_ws(app, event_bus, seq_provider=None) -> None:
 
 
 def _broadcast(event: str, **data) -> None:
-    """EventBus 回调：广播事件给所有 WS 客户端（消息携带 seq）。"""
+    """EventBus 回调：广播事件给所有 WS 客户端（消息携带该事件自身 seq）。"""
     if not _clients:
         return
     try:
-        seq = _seq_provider() if _seq_provider else 0
+        # 优先取事件自身 seq（EventBus 传入），回退当前全局 seq
+        seq = data.pop("seq", _seq_provider() if _seq_provider else 0)
         message = json.dumps({"type": event, "seq": seq, **data},
                              ensure_ascii=False, default=str)
     except (TypeError, ValueError) as e:

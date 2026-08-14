@@ -66,6 +66,7 @@ def test_set_manual_publishes_event():
     seen = {}
     bus.subscribe(SWITCH_CHANGED, lambda event, **kw: seen.update(kw))
     sm.set_manual("tts", False)
+    seen.pop("seq", None)  # seq 为事件元数据，不属于业务载荷
     assert seen == {"name": "tts", "enabled": False, "source": "manual"}
 
 
@@ -113,6 +114,7 @@ def test_schedule_change_publishes_event():
     sm.check_schedules(now=_dt(10, 30))  # 无变更：不重复发布
     sm.check_schedules(now=_dt(20, 0))  # 变更：启用→禁用
     assert len(seen) == 2
+    seen[0].pop("seq", None)  # seq 为事件元数据，不属于业务载荷
     assert seen[0] == {"name": "bilibili", "enabled": True, "source": "schedule"}
     assert seen[1]["enabled"] is False
 

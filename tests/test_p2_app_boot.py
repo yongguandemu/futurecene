@@ -66,3 +66,42 @@ def test_p2_capabilities_routable(monkeypatch):
         orch = registry.match(cap)
         assert orch is not None, f"capability {cap} 未路由"
         assert cap in orch.capabilities()
+
+
+def test_app_boot_with_collaboration_disabled(monkeypatch):
+    """collaboration.enabled=false 默认：不装配协作协调器，单角色行为不变。
+
+    - context 无 collaboration（None）；
+    - 在场角色保持单角色 {yuki}；
+    - POST /api/collab/config 返回 404（未装配）。
+    """
+    from src.app import build_app_context
+
+    app, _ = build_app_context()
+    ctx = app.config["APP_CONTEXT"]
+    assert ctx.get("collaboration") is None
+    assert ctx["session"].present_roles == {"yuki"}
+    client = app.test_client()
+    resp = client.post("/api/collab/config", json={"trigger_probability": 0.5})
+    assert resp.status_code == 404
+
+
+def test_app_boot_with_collaboration_enabled(monkeypatch):
+    """COLLAB_ENABLED=1：装配协作协调器。
+
+    - context 有 collaboration；
+    - 在场角色扩展为 {yuki, lilith}；
+    - POST /api/collab/config 返回 200 且 trigger_probability 生效。
+    """
+    monkeypatch.setenv("COLLAB_ENABLED", "1")
+    from src.app import build_app_context
+
+    app, _ = build_app_context()
+    ctx = app.config["APP_CONTEXT"]
+    assert ctx.get("collaboration") is not None
+    assert ctx["session"].present_roles == {"yuki", "lilith"}
+    client = app.test_client()
+    resp = client.post("/api/collab/config",
+                       json={"trigger_probability": 0.5})
+    assert resp.status_code == 200
+    assert resp.get_json()["data"]["trigger_probability"] == 0.5

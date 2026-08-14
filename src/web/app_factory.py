@@ -24,7 +24,7 @@ session / intent_parser / command_router / event_bus / metrics_provider 等。
 from pathlib import Path
 from typing import Dict, Optional
 
-from flask import Flask, jsonify, redirect, send_from_directory
+from flask import Flask, jsonify, redirect, request, send_from_directory
 
 from src.shared.config_loader import PROJECT_ROOT
 from src.web.routes import command as command_route
@@ -63,6 +63,23 @@ def create_app(context: Optional[Dict] = None) -> Flask:
                         "version": snap["version"],
                         "circuit_breaker": context.get("cost_breaker").snapshot()
                         if context.get("cost_breaker") else {}})
+
+    # POST /api/collab/config：多角色运行时调参（白名单，重启回落 config.yaml）
+    # 未装配（collaboration.enabled=false / COLLAB_ENABLED 未设）返回 404；
+    # 请求体无白名单字段返回 400；生效字段委托 collaboration.update_runtime()。
+    _COLLAB_CONFIG_FIELDS = {"trigger_probability", "trigger_global_cooldown",
+                             "lead_role", "awareness_enabled"}
+
+    @app.post("/api/collab/config")
+    def collab_config():
+        collab = context.get("collaboration")
+        if collab is None:
+            return jsonify({"ok": False, "error": "collaboration 未启用"}), 404
+        body = request.get_json(silent=True) or {}
+        update = {k: v for k, v in body.items() if k in _COLLAB_CONFIG_FIELDS}
+        if not update:
+            return jsonify({"ok": False, "error": "无有效字段"}), 400
+        return jsonify({"ok": True, "data": collab.update_runtime(**update)})
 
     # 前端静态资源服务
     @app.get("/")

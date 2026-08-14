@@ -130,6 +130,34 @@ def build_app_context():
                                profile_loader=profile_loader)
     pipeline.start()
 
+    # ---------- 多角色协作（collaboration.enabled 开关，默认关） ----------
+    # 开启条件：COLLAB_ENABLED=1（环境变量优先）或 config.yaml collaboration.enabled=true。
+    # 装配 CollaborationCoordinator：订阅 danmaku/speech/completed 并驱动 pipeline.execute_with
+    # 按角色发言；profiles 复用既有 profile_loader；add_role 全部合法角色（在场模型）。
+    collaboration = None
+    collab_profiles = None
+    if str(os.environ.get("COLLAB_ENABLED", "") or
+           config_loader.get("collaboration.enabled", False)).lower() in ("1", "true"):
+        from src.orchestrators.collaboration.coordinator import CollaborationCoordinator
+
+        collab_profiles = profile_loader
+        collab_cfg = config_loader.get("collaboration", {}) or {}
+        for r in collab_profiles.all_roles():
+            session.add_role(r)
+        collaboration = CollaborationCoordinator(
+            event_bus=event_bus,
+            pipeline=pipeline,
+            profiles=collab_profiles,
+            session=session,
+            live2d=registry.get("live2d"),
+            lead_role=str(collab_cfg.get("lead_role", "yuki")),
+            rules_order=collab_cfg.get("rules_order"),
+            trigger_probability=float(collab_cfg.get("trigger_probability", 0.3)),
+            trigger_global_cooldown=float(collab_cfg.get("trigger_global_cooldown", 20.0)),
+            awareness_enabled=bool((collab_cfg.get("awareness") or {}).get("enabled", True)),
+        )
+        collaboration.start()
+
     # ---------- 运维：成本 / 熔断 / 看门狗 / 降级 / 崩溃 ----------
     cost_tracker = CostTracker(event_bus=event_bus)
     cost_breaker = CostCircuitBreaker(event_bus, daily_limit=5.0, monthly_limit=100.0)
@@ -151,6 +179,17 @@ def build_app_context():
     from src.commander.state_publisher import StatePublisher
     from src.web.state_provider import StateProvider
 
+    def characters_provider():
+        """角色在场快照：在场角色 + 说话中标识（collaboration 装配时叠加）。"""
+        chars = {}
+        for r in session.present_roles:
+            chars[r] = {"present": True}
+        if collaboration is not None:
+            snap = collaboration.snapshot()
+            for r, item in chars.items():
+                item["speaking"] = (snap.get("current_speaker") == r)
+        return chars
+
     state_provider = StateProvider(
         event_bus=event_bus,
         session=session,
@@ -158,6 +197,7 @@ def build_app_context():
         registry=registry,
         degradation_manager=degradation,
         metrics_provider=metrics_provider,
+        characters_provider=characters_provider,
     )
     state_publisher = StatePublisher(event_bus, state_provider)
     state_publisher.start()
@@ -176,6 +216,8 @@ def build_app_context():
         "degradation_manager": degradation,
         "state_provider": state_provider,
         "state_publisher": state_publisher,
+        "collaboration": collaboration,
+        "profiles": collab_profiles if collaboration else None,
     }
     return create_app(context), event_bus
 

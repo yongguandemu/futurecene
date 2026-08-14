@@ -140,6 +140,21 @@ def build_app_context():
                 "watchdog": watchdog.get_status(),
                 "circuit_breaker": cost_breaker.snapshot()}
 
+    # ---------- 状态快照：StateProvider + StatePublisher（前端重构 · 方案 A） ----------
+    from src.commander.state_publisher import StatePublisher
+    from src.web.state_provider import StateProvider
+
+    state_provider = StateProvider(
+        event_bus=event_bus,
+        session=session,
+        switch_manager=switch_manager,
+        registry=registry,
+        degradation_manager=degradation,
+        metrics_provider=metrics_provider,
+    )
+    state_publisher = StatePublisher(event_bus, state_provider)
+    state_publisher.start()
+
     context = {
         "event_bus": event_bus,
         "switch_manager": switch_manager,
@@ -152,6 +167,8 @@ def build_app_context():
         "cost_tracker": cost_tracker,
         "cost_breaker": cost_breaker,
         "degradation_manager": degradation,
+        "state_provider": state_provider,
+        "state_publisher": state_publisher,
     }
     return create_app(context), event_bus
 

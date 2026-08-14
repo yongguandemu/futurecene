@@ -60,3 +60,27 @@ def test_version_equals_current_seq():
                              metrics_provider=FakeMetrics())
     snap = provider.snapshot()
     assert snap["version"] == bus.current_seq()
+
+
+def test_state_publisher_publishes_on_trigger():
+    bus = EventBus()
+    bus.reset()
+    from src.commander.state_publisher import StatePublisher
+    provider = StateProvider(event_bus=bus, session=FakeSession(),
+                             switch_manager=FakeSwitchManager(),
+                             registry=FakeRegistry(),
+                             degradation_manager=FakeDegradation(),
+                             metrics_provider=FakeMetrics())
+    publisher = StatePublisher(bus, provider)
+    publisher.start()
+    snapshots = []
+    bus.subscribe("state:changed", lambda **kw: snapshots.append(kw))
+    # 触发开关变更
+    bus.publish("switch:changed", name="llm", enabled=False)
+    assert len(snapshots) == 1
+    assert "snapshot" in snapshots[0]
+    assert snapshots[0]["snapshot"]["version"] <= bus.current_seq()
+    # 非触发事件不发布
+    bus.publish("llm:requested", text="hi")
+    assert len(snapshots) == 1
+    publisher.stop()

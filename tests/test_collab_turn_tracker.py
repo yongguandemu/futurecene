@@ -11,7 +11,8 @@ def test_acquire_release_mutex():
     tt = TurnTracker()
     assert tt.acquire("yuki") is True
     assert tt.acquire("lilith") is False   # 互斥
-    tt.release("yuki")
+    assert tt.release("lilith") is False   # 角色不匹配 → 不释放
+    assert tt.release("yuki") is True
     assert tt.acquire("lilith") is True
 
 
@@ -20,7 +21,9 @@ def test_idle_seconds():
     tt.acquire("yuki")
     time.sleep(0.02)
     tt.release("yuki")
-    assert tt.idle_seconds("lilith") >= tt.idle_seconds("yuki")
+    time.sleep(0.02)                                   # 留出可测的闲置窗口（防时钟粒度归零）
+    assert tt.idle_seconds("lilith") == float("inf")   # 从未发言 → 无穷大
+    assert 0 < tt.idle_seconds("yuki") < 0.1           # 刚释放 → 冷却刚起步
 
 
 def test_pending_queue_priority():
@@ -32,6 +35,12 @@ def test_pending_queue_priority():
     tt.release("yuki")
     nxt = tt.dequeue()
     assert nxt["request_id"] == "b"   # P0 优先于先到的 P3
+    tt.release("yuki")
+    nxt = tt.dequeue()
+    assert nxt["request_id"] == "a"   # 同优先级 FIFO：a 先于 c
+    tt.release("lilith")
+    nxt = tt.dequeue()
+    assert nxt["request_id"] == "c"
 
 
 def test_history_records_turns():

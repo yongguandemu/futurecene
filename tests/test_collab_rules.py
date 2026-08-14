@@ -5,7 +5,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.orchestrators.collaboration.rules import (
     ArbitrationContext, MentionRule, IntentRule, RelevanceRule,
-    CooldownRule, RandomRule,
+    CooldownRule, RandomRule, make_rules_by_order,
 )
 
 
@@ -23,11 +23,27 @@ class FakeProfiles:
                 "lilith": {"topics": ["吐槽", "直播"], "patterns": []}}[role]
 
 
+class BadPatternProfiles:
+    """含非法正则与空串 pattern，用于容错测试。"""
+
+    def keywords_for(self, role):
+        return {"yuki": {"topics": [], "patterns": ["regex:[", ""]},
+                "lilith": {"topics": [], "patterns": []}}[role]
+
+
 def _ctx(text, lead="yuki", kind="danmaku"):
     return ArbitrationContext(text=text, user_name="观众", source="danmaku",
                               kind=kind, lead_role=lead,
                               present_roles={"yuki", "lilith"},
                               profiles=FakeProfiles(), turn_tracker=FakeTT())
+
+
+def _ctx_raw(text, profiles=None, tracker=None):
+    return ArbitrationContext(text=text, user_name="观众", source="danmaku",
+                              kind="danmaku", lead_role="yuki",
+                              present_roles={"yuki", "lilith"},
+                              profiles=profiles or FakeProfiles(),
+                              turn_tracker=tracker or FakeTT())
 
 
 def test_mention_rule():
@@ -37,10 +53,24 @@ def test_mention_rule():
     assert r.evaluate(_ctx("Yuki酱讲个故事")).role == "yuki"
 
 
+def test_mention_rule_word_boundary():
+    r = MentionRule()
+    # 反例：@yukiko 不得因前缀 yuki 误命中（词边界）
+    v = r.evaluate(_ctx("@yukiko 讲个故事"))
+    assert v.role is None
+    assert v.reason == "no-mention"
+    # 命中区间判定：@lilith 你看 yuki酱 -> lilith（按正则命中区间而非全局子串）
+    assert r.evaluate(_ctx("@lilith 你看 yuki酱")).role == "lilith"
+
+
 def test_intent_rule_routes_to_lead():
     r = IntentRule()
     assert r.evaluate(_ctx("下播", lead="yuki")).role == "yuki"
     assert r.evaluate(_ctx("!状态", lead="lilith")).role == "lilith"
+    # 反例：无意图文本不应命中
+    v = r.evaluate(_ctx("今天天气不错"))
+    assert v.role is None
+    assert v.reason == "no-intent"
 
 
 def test_relevance_rule():
@@ -49,12 +79,47 @@ def test_relevance_rule():
     assert r.evaluate(_ctx("讲个故事吧")).role == "yuki"
 
 
+def test_relevance_rule_bad_regex_no_crash():
+    # 非法正则 "regex:[" 不应抛异常，空串 pattern 应被跳过，均计 0 分
+    r = RelevanceRule()
+    v = r.evaluate(_ctx_raw("随便聊聊", profiles=BadPatternProfiles()))
+    assert v.role is None
+    assert v.reason == "no-keyword-hit"
+
+
 def test_cooldown_rule_prefers_idle():
     r = CooldownRule()
     assert r.evaluate(_ctx("随便聊聊")).role == "yuki"  # yuki 闲置更久
+
+
+def test_cooldown_rule_tie_falls_back():
+    # 两角色闲置时间相同 -> 平局交回链尾 RandomRule，不依赖 set 迭代序
+    r = CooldownRule()
+    v = r.evaluate(_ctx_raw("随便聊聊", tracker=FakeTT({"yuki": 100.0, "lilith": 100.0})))
+    assert v.role is None
+    assert v.reason == "tie"
+    assert v.confidence == 0.6
 
 
 def test_random_rule_never_none():
     r = RandomRule(seed=1)
     verdict = r.evaluate(_ctx("随便聊聊"))
     assert verdict.role in {"yuki", "lilith"}
+
+
+def test_random_rule_last_choice_alternates():
+    # last_choice 记录后，连续两次调用应偏向另一角色（交替）
+    r = RandomRule(seed=1)
+    first = r.evaluate(_ctx("随便聊聊")).role
+    second = r.evaluate(_ctx("随便聊聊")).role
+    assert first in {"yuki", "lilith"}
+    assert second in {"yuki", "lilith"}
+    assert first != second
+
+
+def test_make_rules_by_order_seed_and_unknown():
+    # seed 透传：同 seed 构造的 random 规则首次结果一致（重复调用不重新随机）
+    rules = make_rules_by_order(["random", "no-such-rule"], seed=7)
+    assert [r.name for r in rules] == ["random"]
+    assert rules[0].evaluate(_ctx("随便聊聊")).role == \
+        RandomRule(seed=7).evaluate(_ctx("随便聊聊")).role

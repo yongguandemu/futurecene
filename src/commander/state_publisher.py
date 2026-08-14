@@ -36,7 +36,7 @@ from src.shared.events import (
 
 logger = logging.getLogger(__name__)
 
-# 五类触发事件
+# 触发事件清单（六类 10 个：开关 / 会话 / 在场发言 / 降级 / watchdog / 成本）
 _TRIGGER_EVENTS = [
     SWITCH_CHANGED,
     SESSION_SWITCHED,

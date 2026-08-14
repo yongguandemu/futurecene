@@ -8,8 +8,14 @@ from src.web.state_provider import StateProvider
 
 
 class FakeSession:
+    def __init__(self, present_roles=()):
+        self.present_roles = present_roles
+
     def snapshot(self):
-        return {"session_id": "default", "role": "yuki"}
+        snap = {"session_id": "default", "role": "yuki"}
+        if self.present_roles:
+            snap["present_roles"] = list(self.present_roles)
+        return snap
 
 
 class FakeSwitchManager:
@@ -98,6 +104,44 @@ def test_snapshot_has_characters():
     snap = provider.snapshot()
     assert "characters" in snap
     assert snap["characters"]["yuki"]["present"] is True
+
+
+def test_snapshot_fallback_from_present_roles():
+    # 无 characters_provider 时，以 session.present_roles 兜底派生
+    bus = EventBus()
+    provider = StateProvider(event_bus=bus, session=FakeSession(present_roles=["yuki", "lilith"]),
+                             switch_manager=FakeSwitchManager(),
+                             registry=FakeRegistry(),
+                             degradation_manager=FakeDegradation(),
+                             metrics_provider=FakeMetrics())
+    snap = provider.snapshot()
+    assert snap["characters"] == {"yuki": {"present": True},
+                                  "lilith": {"present": True}}
+
+
+def test_snapshot_empty_characters_without_present_roles():
+    # 无 characters_provider 且 session 无 present_roles 时，characters 为空 dict
+    bus = EventBus()
+    provider = StateProvider(event_bus=bus, session=FakeSession(),
+                             switch_manager=FakeSwitchManager(),
+                             registry=FakeRegistry(),
+                             degradation_manager=FakeDegradation(),
+                             metrics_provider=FakeMetrics())
+    snap = provider.snapshot()
+    assert snap["characters"] == {}
+
+
+def test_snapshot_empty_characters_from_provider_is_authoritative():
+    # provider 明确返回空 dict 时保持权威空值，不触发 present_roles 兜底
+    bus = EventBus()
+    provider = StateProvider(event_bus=bus, session=FakeSession(present_roles=["yuki"]),
+                             switch_manager=FakeSwitchManager(),
+                             registry=FakeRegistry(),
+                             degradation_manager=FakeDegradation(),
+                             metrics_provider=FakeMetrics(),
+                             characters_provider=lambda: {})
+    snap = provider.snapshot()
+    assert snap["characters"] == {}
 
 
 def test_state_publisher_triggers_on_presence():

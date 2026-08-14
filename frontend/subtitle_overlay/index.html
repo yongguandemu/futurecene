@@ -3,10 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <title>字幕叠加层 - Subtitle Overlay</title>
+<link rel="stylesheet" href="/frontend/assets/tokens.css">
 <script src="/frontend/assets/store.js"></script>
 <script src="/frontend/assets/state_sync.js"></script>
 <style>
-  /* OBS 浏览器源：透明背景 */
+  /* OBS 浏览器源：透明背景（覆盖 tokens.css 的 body 底色） */
   html, body {
     margin: 0;
     padding: 0;
@@ -53,6 +54,21 @@
     color: #ffd9a0;
     margin-bottom: 4px;
     letter-spacing: 1px;
+    transition: color 0.25s ease;
+  }
+
+  /* 双角色主题色（复用 tokens.css 变量）：yuki 紫 / lilith 红；无角色保持默认暖金 */
+  #subtitle-role.role-yuki { color: var(--accent3, #6366f1); }
+  #subtitle-role.role-lilith { color: var(--lilith-color, #ef4444); }
+
+  /* 说话高亮：当前发言角色字幕卡边框 + 角色色光晕（OBS 透明底） */
+  #subtitle-card.role-yuki {
+    border-color: rgba(99, 102, 241, 0.7);
+    box-shadow: 0 0 18px rgba(99, 102, 241, 0.35), 0 4px 24px rgba(0, 0, 0, 0.45);
+  }
+  #subtitle-card.role-lilith {
+    border-color: rgba(239, 68, 68, 0.7);
+    box-shadow: 0 0 18px rgba(239, 68, 68, 0.35), 0 4px 24px rgba(0, 0, 0, 0.45);
   }
 
   #subtitle-text {
@@ -90,10 +106,21 @@
   var connEl = document.getElementById("conn-state");
   var hideTimer = null;
 
+  // 角色 → 显示名（双角色：yuki/lilith；未在表内时直接显示 role 原文）
+  var ROLE_NAMES = { yuki: "Yuki", lilith: "Lilith" };
+
   function showSubtitle(text, role) {
     if (!text) return;
-    roleEl.textContent = role || "小恶魔";
+    var name = (role && ROLE_NAMES[role]) ? ROLE_NAMES[role] : (role || "小恶魔");
+    roleEl.textContent = name;
     textEl.textContent = text;
+    // 双角色样式：按 event.role 切换主题色与发光（无角色/未知角色 → 默认样式）
+    card.classList.remove("role-yuki", "role-lilith");
+    roleEl.classList.remove("role-yuki", "role-lilith");
+    if (role === "yuki" || role === "lilith") {
+      card.classList.add("role-" + role);
+      roleEl.classList.add("role-" + role);
+    }
     card.classList.add("show");
     clearTimeout(hideTimer);
     hideTimer = setTimeout(function () {

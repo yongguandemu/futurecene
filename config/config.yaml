@@ -95,6 +95,16 @@ intelligence:
   context_cache_ttl: 0.5          # 情境快照缓存 TTL（秒）
 
 # ---------- 多角色协作（P2 装配，P1 先备好角色映射） ----------
+# 初值说明：
+# - enabled: 总开关（默认关）。开启方式：本项改 true，或环境变量 COLLAB_ENABLED=1（环境变量优先）。
+# - rules_order: 发言权仲裁规则链（按序命中即放行），5 个内置规则全部零 LLM、确定性文本规则：
+#   mention（@指定角色，硬放行）→ intent（!/命令等系统意图 → lead_role）→
+#   relevance（关键词加权，profiles 的 patterns/topics/personality）→
+#   cooldown（闲置最久者优先）→ random（平局随机兜底）。
+# - lead_role: 系统意图归属角色（不独占发言权，仅影响 intent 规则；change 后重启回落本初值）。
+# - trigger_probability: 一角色发言完成后对方接话（banter）概率，0~1；0 关闭联动接话。
+# - trigger_global_cooldown: 联动接话全局冷却（秒），防连续接话刷屏。
+# - awareness: 感知彼此——为发言角色注入对方最近发言（max_partner_lines 条）。
 collaboration:
   enabled: false
   rules_order: [mention, intent, relevance, cooldown, random]

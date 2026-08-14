@@ -109,9 +109,35 @@
     };
   }
 
+  /* ---- 刷新恢复（sessionStorage；不含对话历史，对话历史由页面单独管理） ---- */
+  function persistOnUnload(store, key) {
+    window.addEventListener('pagehide', function () {
+      try {
+        var s = store.getState();
+        sessionStorage.setItem(key, JSON.stringify({
+          session: s.session, switches: s.switches, cost: s.cost,
+          watchdog: s.watchdog, degradation: s.degradation,
+          snapshotSeq: s.snapshotSeq
+        }));
+      } catch (e) {}
+    });
+  }
+
+  function restoreFromSession(store, key) {
+    try {
+      var raw = sessionStorage.getItem(key);
+      if (!raw) return false;
+      var saved = JSON.parse(raw);
+      store.dispatch({ type: 'state:changed', snapshot: saved, version: saved.snapshotSeq });
+      return true;
+    } catch (e) { return false; }
+  }
+
   global.FSStore = {
     createStore: createStore,
     makeReducer: makeReducer,
-    initialState: initialState
+    initialState: initialState,
+    persistOnUnload: persistOnUnload,
+    restoreFromSession: restoreFromSession
   };
 })(window);

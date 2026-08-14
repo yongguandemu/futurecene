@@ -1816,6 +1816,8 @@ async function init() {
   setText('chatSessionLabel', '会话：' + SESSION_ID);
   renderHistory();               // 从 localStorage 恢复对话（单标签）
   renderSchedules();             // 恢复日程
+  FSStore.restoreFromSession(store, 'fs-assistant-state'); // 恢复上次状态面板（可被事件流覆盖）
+  FSStore.persistOnUnload(store, 'fs-assistant-state');    // 刷新时持久化状态面板
   renderStatusPanel();
   renderOverview();
   renderConfig();

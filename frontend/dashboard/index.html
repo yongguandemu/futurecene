@@ -614,6 +614,8 @@ html, body { height: 100%; overflow: hidden; }
 
   // ============ 启动 ============
   renderAll();   // 初始占位
+  FSStore.restoreFromSession(store, 'fs-dash-state'); // 恢复上次状态面板（可被事件流覆盖）
+  FSStore.persistOnUnload(store, 'fs-dash-state');    // 刷新时持久化状态面板
   sync.init();   // 首屏拉取 /api/state → 建 WS；断线/重连自动补数
 })();
 </script>

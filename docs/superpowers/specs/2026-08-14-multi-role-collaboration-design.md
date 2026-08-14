@@ -29,8 +29,9 @@
 | `tts_orchestrator.py` | `_voice_map` 已含 yuki/lilith 音色，按 payload.role 选音色 | `tts:audio_ready` 事件**不带 role**，口型无法路由 |
 | `live2d_orchestrator.py` | 单模型状态机（`_model` 一个），`_on_audio_ready` 无条件触发口型 | 多模型实例化 + 事件带 role |
 | 前端 `live2d_stream/` | `MODEL_URL` 硬编码"小恶魔"，单 PIXI stage 单模型居中 | 双模型同台渲染 |
+| 前端表情/动作 | `setExpression` 直接 `model.expression(语义名)`，**无映射表**（小恶魔中文表情名"头发/唱歌…"，语义"开心"等静默失败） | 需 per-model `expression_map`/`motion_map`（现有潜在缺陷 + 跨模型适配点） |
 | 前端 store/assistant | `session.role` 单值；assistant 已有角色卡片 UI | 状态需按角色维度扩展 |
-| 资产 | V2 `assets/live2d/` 仅有"小恶魔"模型 | Lilith 模型资产缺失（旧项目有 Haru/Hiyori 可迁移） |
+| 资产 | V2 `assets/live2d/` 仅有"小恶魔"模型 | Lilith 模型资产缺失（旧项目 Haru/Hiyori 可迁移） |
 
 ---
 
@@ -263,11 +264,39 @@ danmaku:received
 
 1. **MentionRule（手动指定，硬放行）**：`@yuki`/`@lilith`、"Yuki/Yuki酱你怎么看"等显式指向 → 直接放行该角色（若该角色不在场则返回 None，不转派）。
 2. **IntentRule（意图类型）**：系统/运营意图（下播、开播、状态、感谢、点歌、日程）→ `lead_role`。意图识别用现有 `intent_parser` 规则集（`_STATUS_RE`/`_POINT_SONG_RE` 等）+ 新增少量运营词表，不引入模型。
-3. **RelevanceRule（相关性）**：弹幕文本对每个在场角色做关键词加权（profile.keywords：personality 标签、catchphrases、专属话题词；可含正则/短语），得分最高者胜出；得分差 < 阈值视为平局。
+3. **RelevanceRule（相关性）**：弹幕文本对每个在场角色做关键词加权（`profile.keywords`），得分最高者胜出；得分差 < 阈值视为平局。
+
+   **关键词格式定义（character.yaml v2.1 新增字段，评审确认）**：
+
+   ```yaml
+   keywords:                      # 新增（缺失时兜底推导，见下）
+     personality: [温柔, 害羞, 认真]      # 人格标签（与 character.personality 对应）
+     topics: [故事, 月亮, 邮差]           # 专属话题词（子串匹配）
+     patterns:                            # 短语/正则扩展（子串或 regex: 前缀）
+       - "讲个故事"
+       - "regex:月亮.*邮差"
+   ```
+
+   - 匹配规则：弹幕依次命中 `patterns`（短语子串/正则）→ `topics`（子串）→ `personality`（子串），命中加权递减；`patterns` 命中权重最高。
+   - **兜底推导**：`keywords` 缺失时从 `character.personality` 标签 + `character.catchphrase` + `speaking_style` 分词抽取生成（零配置可降级运行，规则质量受限于现有字段）。
+   - `catchphrases.json` 是口癖语料（text/weight/position，用于 TTS/字幕口癖注入），**不承担相关性职责**。
+   - 若后续需要更高精度，可在 `rules.py` 插槽加向量规则（不动框架），本期不做（避免 embedding 调用）。
 4. **CooldownRule（冷却）**：`turn_tracker.idle_seconds(role)` 最大者先说话（"谁闲置久谁先说"）；`RandomRule` 上次选择记录在此取反。
 5. **RandomRule（随机扰动）**：平局时随机；记录 `last_random_choice`，下次平局时偏向另一角色（anti-repeat）。
 
-互斥与排队：`current_speaker` 非空时新请求入 `pending_queue`；`speech:completed` 释放后按队列顺序仲裁。**同一时刻保证至多一个角色发声**（验收断言项）。
+互斥与排队（评审确认的队列调度策略）：`current_speaker` 非空时新请求入 `pending_queue`；`speech:completed` 释放后仲裁。**同一时刻保证至多一个角色发声**（验收断言项）。
+
+队列优先级（请求携带 `priority`，插队 + 同级 FIFO）：
+
+| 优先级 | 请求来源 | 示例 |
+|---|---|---|
+| P0 | MentionRule（手动 @ 指定） | "@Lilith 你同意吗" |
+| P1 | IntentRule（系统意图） | "下播" |
+| P2 | RelevanceRule（相关性胜出） | "Yuki讲个故事" |
+| P3 | Collab 接话/吐槽/补充 | 对方发言后的联动提案 |
+| P4 | Active 冷场闲聊 | 无输入自发话题 |
+
+规则：互斥释放后按 priority 升序取队首，同优先级按到达顺序（FIFO）。**v1 不支持硬打断**（当前发言播完才切换，切换点见第 9.1 节口型收尾）；P3 可选"软抢占"（当前音频播放 >70% 时，P0/P1 请求等待剩余 <1s 后切换）。
 
 配置（`config.yaml` `collaboration` 域）：
 
@@ -276,12 +305,16 @@ collaboration:
   enabled: false            # 默认关，开启即多角色模式
   rules_order: [mention, intent, relevance, cooldown, random]
   lead_role: yuki
-  trigger_probability: 0.3  # 接话概率
-  trigger_global_cooldown: 20.0
+  trigger_probability: 0.3  # 接话概率（初值建议，可调）
+  trigger_global_cooldown: 20.0  # 接话全局冷却秒（初值建议，可调）
   awareness:
     enabled: true           # 感知彼此（system_prompt 注入对方最近发言）
     max_partner_lines: 2
 ```
+
+**初值说明（评审确认）**：`trigger_probability: 0.3` + `trigger_global_cooldown: 20.0` 为建议起步值（约每 1-2 条发言有一次接话机会、20s 内至多 1 次联动），实施期需实测调优；若接话过频/过少，优先调这两项。
+
+**运行中动态调整（评审确认）**：`ConfigLoader` 为启动时一次性加载（无热更新），故协调器持有 `_runtime_config`（初值 = config.yaml 的 collaboration 域），仲裁器/触发模块实时读取该对象；P2 提供 `POST /api/collab/config`（仅允许调整 `trigger_probability`/`trigger_global_cooldown`/`rules_order`/`awareness.*` 白名单项）覆盖运行时值，重启回落 config.yaml 初值。前端辅助页（P3）可暴露调节滑块。
 
 ---
 
@@ -292,7 +325,24 @@ collaboration:
 - 单 `PIXI.Application` stage，加载两个 `Live2DModel`（pixi-live2d-display 原生支持多模型）。
 - 布局：左右分列（Yuki 左 / Lilith 右），位置/缩放由页面配置或 `/api/characters` 下发（`roles[].live2d_model`、`position`、`scale`）。
 - 模型 URL：不再硬编码，从 `roles[].live2d_model` 映射（`/assets/live2d/{model}/{model}.model3.json`）。
-- 事件按 role 路由：`live2d:expression_changed(role)` → 对应模型表情；`live2d:motion_triggered(role)` → 对应模型动作；`live2d:lip_sync_start(role, audio_id)` → 对应模型口型（互不干扰，可各自张口）。
+- **Lilith 模型来源（评审确认）**：迁移旧项目 `Haru` 模型（核验：`Haru.model3.json` 为 Cubism 3 —— `Version:3` + moc3/physics3/pose3/cdi3，与 V2 现有"小恶魔"同格式、同运行时 pixi-live2d-display + live2dcubismcore，兼容性高）。迁移 = 拷贝 `assets/live2d/Haru/` 目录 + 配置映射，约 0.5 天，不威胁工期。若决赛时间紧，备选降级：两角色共用"小恶魔"模型 + 换色/标签区分（零资产工期，仅做角色视觉标识）。
+- **per-model 表情/动作映射（评审确认，跨模型适配必做）**：不同模型的表情/动作命名各异（小恶魔表情为中文"头发/唱歌…"，Haru 为 `F01-F05`；动作小恶魔为 `wave/nod/shake/idle`，Haru 为 `haru_g_m01..m20`），且现有前端 `model.expression(语义名)` 直接透传、无映射表（语义表情静默失败）。新增 `roles[].expression_map`/`motion_map`：
+
+  ```yaml
+  roles:
+    - name: yuki
+      live2d_model: 小恶魔
+      expression_map: {开心: 唱歌, 难过: 流泪, 惊讶: 头发, 害羞: 嘟嘴, 生气: 脸黑, 平静: 头发}
+      motion_map: {wave: wave, nod: nod, shake: shake, idle: idle}
+    - name: lilith
+      live2d_model: Haru
+      expression_map: {开心: F01, 难过: F03, 惊讶: F02, 害羞: F04, 生气: F05, 平静: F01}
+      motion_map: {wave: haru_g_m01, nod: haru_g_m03, shake: haru_g_m05, idle: haru_g_idle}
+  ```
+
+  前端收到语义事件后先经映射表再调用 `model.expression/motion`；映射缺失时跳过（不崩溃）。此映射同时修复现有单模型的表情失效缺陷。
+- 事件按 role 路由：`live2d:expression_changed(role)` → 对应模型表情；`live2d:motion_triggered(role)` → 对应模型动作；`live2d:lip_sync_start(role, audio_id)` → 对应模型口型。
+- **口型切换平滑（评审确认：自然过渡 + 显式收尾）**：互斥保证不会两嘴同张；切换时前端在收到新角色 `lip_sync_start` 前，对旧角色模型执行收尾（口型归零 + 回 idle，约 200ms 过渡动画），再启动新角色口型。后端不硬重置（`LIP_SYNC_END` 已按时长自动触发），允许旧角色自然合嘴的轻微残留，保证视觉平滑。
 - 静默态：未发言角色保持 idle 动画，可加"说话高亮"（边框/聚光）。
 
 ### 9.2 `frontend/assets/store.js`
@@ -331,24 +381,24 @@ collaboration:
 4. `state_provider.py` + `state_publisher.py` 触发列表扩展。
    - 回归：265 项测试全绿。
 
-### P1 · 双模型渲染（前端可见性先行）— 约 1.5-2 人日
+### P1 · 双模型渲染（前端可见性先行）— 约 2-2.5 人日
 5. `live2d_orchestrator`：多模型状态机 + 事件带 role + 口型按 role 路由。
-6. `assets/live2d/`：Lilith 模型资产就位（旧项目 Haru/Hiyori 迁移或新制）+ `config.yaml` roles 映射。
-7. `live2d_stream/index.html`：双模型同台渲染。
-   - 验收点：双角色同屏、各自表情/口型由角色事件驱动（此时尚未发言，验证渲染与路由）。
+6. 资产与映射：迁移旧项目 `Haru` 至 `assets/live2d/Haru/`（约 0.5 天，含加载验证）；`config.yaml` 新增 `roles[]`（live2d_model/position/scale + `expression_map`/`motion_map`）。
+7. `live2d_stream/index.html`：双模型同台渲染 + 表情/动作映射应用 + 口型收尾过渡（200ms）。
+   - 验收点：双角色同屏、各自表情/动作/口型由带 role 的事件驱动（此时尚未发言，验证渲染与路由；同时修复现有单模型表情失效缺陷）。
 
-### P2 · 联动核心（完整双人对话）— 约 3-4 人日
-8. `collaboration/` 六文件：rules → arbitrator → turn_tracker → context_manager → triggers → coordinator（TDD，每规则独立单测）。
+### P2 · 联动核心（完整双人对话）— 约 3.5-4.5 人日
+8. `collaboration/` 六文件：rules → arbitrator → turn_tracker → context_manager → triggers → coordinator（TDD，每规则独立单测，含队列优先级单测）。
 9. `danmaku_pipeline.py`：`execute_with` + system_prompt 注入 + `speech:completed` 发布。
-10. `app.py` 装配 + `collaboration.enabled` 开关（单/多角色模式切换）。
+10. `app.py` 装配 + `collaboration.enabled` 开关（单/多角色模式切换）+ `POST /api/collab/config` 运行时调参（约 +0.5 人日）。
 11. 前端：store `characters` + assistant 双角色指令/@ 定向 + 状态面板。
-12. 集成测试：双人对话多轮、互斥断言、回归 265。
+12. 集成测试：双人对话多轮、互斥断言、队列优先级、回归 265。
 
 ### P3 · 增强 — 约 1-1.5 人日
 13. 冷场自发闲聊（active_dialogue 角色化 + coordinator 接线）。
 14. 感知彼此上下文强化（awareness 配置打磨）+ 双角色 UI 美化。
 
-**合计约 6.5-9 人日**（不含测试约 +1 人日，测试随各阶段 TDD 进行）。
+**合计约 7.5-10 人日**（不含测试约 +1 人日，测试随各阶段 TDD 进行）。
 
 ---
 
@@ -358,7 +408,9 @@ collaboration:
 2. 仲裁五规则均可独立单测通过（Mention/Intent/Relevance/Cooldown/Random 各含正反例）。
 3. **互斥断言**：任一时刻至多一个角色发声（`current_speaker` 唯一，集成测试覆盖并发弹幕）。
 4. 完整双人对话：弹幕触发主回应 → 对方在冷却达标后接话 → 形成 ≥2 轮对话（`speech:completed` 链可观测）。
-5. 单角色模式零回归：`collaboration.enabled=false` 时 265 测试 + 既有端到端验收全部通过。
+5. 单角色模式零回归（评审确认的回归范围，分两层）：
+   - **每阶段必测（基础层）**：`collaboration.enabled=false` 时 265 项 pytest 全绿 + 弹幕链路 demo + 既有端到端脚本（API 快照结构/四页面 200/WS 事件 seq 与断线恢复/角色切换/开关控制 37 项，即前端重构验收脚本）。约 0.5 人日/阶段。
+   - **P2 完成后一次（完整层）**：追加智能助手全功能回归——状态面板（角色/开关/成本/看门狗）、开关控制、对话历史与刷新恢复（sessionStorage）、语音输入保留、消息按角色渲染。约追加 0.5 人日，仅执行一次。
 6. 冷场闲聊（P3）：静默超时后双人自发对话可触发，无输入时有限频（不刷屏）。
 7. 联动逻辑无真实 LLM/TTS 依赖即可测试（仲裁/话轮/触发全部 mock 化）。
 
@@ -378,3 +430,16 @@ collaboration:
 - 第三角色（lumi）完整在场（架构可扩展，仅配置接入，不做双人以上群聊编排）。
 - 角色-观众/群聊联动（复用同一套 arbitrator/triggers，另立项目）。
 - 向量化相关性（留接口，本期用关键词规则）。
+
+## 15. 评审决策摘要（2026-08-14，对应评审 6 点）
+
+| # | 评审点 | 决策 | 落点 |
+|---|---|---|---|
+| 1 | Lilith 模型来源 | **迁移旧项目 Haru**（已核验 Cubism 3 同格式同运行时，约 0.5 天）；时间紧降级为共用小恶魔 + 换色区分；跨模型必须配 `expression_map`/`motion_map`（顺带修复现有表情失效缺陷） | §9.1、§11 P1 |
+| 2 | 相关性关键词来源 | character.yaml v2.1 新增 `keywords`（personality/topics/patterns，支持子串/短语/`regex:` 前缀）；缺失时从 personality/catchphrase/speaking_style 兜底推导；catchphrases.json 仅作口癖不担相关性 | §8 规则 3 |
+| 3 | 接话概率/冷却初值 | `0.3`/`20.0` 为建议起步值；ConfigLoader 无热更新 → 协调器 `_runtime_config` + `POST /api/collab/config` 白名单项运行时调整，重启回落 | §8 配置 |
+| 4 | 单角色回归范围 | 分两层：每阶段基础层（265 测试 + 弹幕 demo + 37 项端到端脚本，0.5 人日）；P2 后一次完整层（助手全功能 +0.5 人日） | §12 项 5 |
+| 5 | 待发队列优先级 | 请求带 priority（Mention P0 > Intent P1 > Relevance P2 > Collab P3 > Active P4），插队 + 同级 FIFO；v1 不硬打断，P3 可选软抢占 | §8 互斥与排队 |
+| 6 | 口型切换平滑 | 自然过渡 + 显式收尾：新角色 `lip_sync_start` 前旧模型口型归零回 idle（200ms）；后端不硬重置 | §9.1 |
+
+总工作量由 6.5-9 人日调整为 **7.5-10 人日**（含 Haru 迁移与运行时调参 API）。

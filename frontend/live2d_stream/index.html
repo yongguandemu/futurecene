@@ -3,6 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <title>Live2D 直播源</title>
+<script src="/frontend/assets/store.js"></script>
+<script src="/frontend/assets/state_sync.js"></script>
 <style>
   /* OBS 浏览器源：透明背景 */
   html, body {
@@ -40,10 +42,10 @@
   <div id="hint">模型加载中…</div>
   <div id="canvas-holder"></div>
 
-  <!-- 本地 vendor：PixiJS + Live2D Cubism（离线可用，规格书 12.1） -->
-  <script src="../vendor/pixi.min.js"></script>
-  <script src="../vendor/pixi-live2d-display.min.js"></script>
-  <script src="../vendor/live2dcubismcore.min.js"></script>
+  <!-- 本地 vendor：PixiJS + Live2D Cubism（离线可用，规格书 12.1；/frontend/ 由 Flask 静态路由服务） -->
+  <script src="/frontend/vendor/pixi.min.js"></script>
+  <script src="/frontend/vendor/pixi-live2d-display.min.js"></script>
+  <script src="/frontend/vendor/live2dcubismcore.min.js"></script>
 
 <script>
 (function () {
@@ -57,26 +59,8 @@
     hint.style.display = "block";
   }
 
-  // Live2D 口型同步：监听 tts:audio_ready（表达领域协作，规格书 3.4）
+  // Live2D 口型同步：监听 tts:audio_ready（表达领域协作，规格书 3.4，保留现有功能）
   var mouthOpen = 0;
-
-  function connectWs() {
-    var proto = location.protocol === "https:" ? "wss" : "ws";
-    try {
-      var ws = new WebSocket(proto + "://" + location.host + "/ws/events");
-      ws.onmessage = function (evt) {
-        try {
-          var msg = JSON.parse(evt.data);
-          if (msg.type === "tts:audio_ready") {
-            // 音频就绪：触发一段口型动画（音频播放由前端 WS /ws/tts_audio 提供，M4）
-            setMouth(true);
-            setTimeout(function () { setMouth(false); }, msg.duration_ms || 1500);
-          }
-        } catch (e) { /* ignore */ }
-      };
-      ws.onclose = function () { setTimeout(connectWs, 3000); };
-    } catch (e) { /* ignore */ }
-  }
 
   function setMouth(open) {
     mouthOpen = open ? 0.9 : 0;
@@ -88,13 +72,22 @@
     }
   }
 
-  // 演示模式：后端未就绪时模拟口型（TODO: 确认 — /ws/tts_audio 就绪后移除）
-  var demoIdx = 0;
-  function demoMouth() {
-    demoIdx++;
-    if (demoIdx % 3 === 0) {
+  // ---- store 事件处理（数据源统一，只订阅 live2d:/audio:/tts:） ----
+  // live2d:motion_triggered → 触发动作（motion 为动作名）
+  function triggerMotion(name) {
+    if (!window.__app || !window.__app.model || !name) return;
+    try { window.__app.model.motion(name); } catch (e) { /* ignore */ }
+  }
+  // live2d:expression_changed → 切换表情（expression 为表情 id/名）
+  function setExpression(name) {
+    if (!window.__app || !window.__app.model || !name) return;
+    try { window.__app.model.expression(name); } catch (e) { /* ignore */ }
+  }
+  // audio:segment_ready → 音频分片就绪：触发一段口型动画（音频播放由 /ws/tts_audio 通道提供）
+  function playSegment(audioId) {
+    if (window.__app && window.__app.model) {
       setMouth(true);
-      setTimeout(function () { setMouth(false); }, 1200);
+      setTimeout(function () { setMouth(false); }, 1500);
     }
   }
 
@@ -130,8 +123,24 @@
       // 模型缺失时保持透明画布，不阻塞 OBS 使用
     }
 
-    connectWs();
-    setInterval(demoMouth, 4000);
+    // 单一 store + WS 同步：口型/表情/动作由后端事件驱动（断线自动重连补数）
+    var store = FSStore.createStore(FSStore.makeReducer(), FSStore.initialState());
+    var sync = new FSStateSync(store);
+    sync.init();
+
+    store.subscribe("live2d:", function (state, event) {
+      if (event.type === "live2d:motion_triggered") triggerMotion(event.motion);
+      if (event.type === "live2d:expression_changed") setExpression(event.expression);
+    });
+    store.subscribe("audio:", function (state, event) {
+      if (event.type === "audio:segment_ready") playSegment(event.audio_id);
+    });
+    store.subscribe("tts:", function (state, event) {
+      if (event.type === "tts:audio_ready") {
+        setMouth(true);
+        setTimeout(function () { setMouth(false); }, event.duration_ms || 1500);
+      }
+    });
   }
 
   if (document.readyState === "loading") {

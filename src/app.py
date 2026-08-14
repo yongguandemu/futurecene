@@ -61,6 +61,41 @@ from src.web.app_factory import create_app  # noqa: E402
 logger = get("app")
 
 
+def _role_topic(role: str, profiles, session, collaboration, llm_orch) -> dict:
+    """角色化主动话题生成（Task 18 冷场自发闲聊）。
+
+    fn(role) -> {text, mood}（ActiveDialogue.set_role_generator 契约）：
+    prompt 携带角色人设（profile.system_prompt）+ 对方最近发言（collaboration
+    snapshot.recent_turns）+ 在场搭档（session.present_roles），调 LLM _chat 生成；
+    任何失败回退 DEFAULT_TOPICS 话题池随机，保证冷场闲聊不中断。
+    """
+    import random
+    from src.orchestrators.llm_orchestrator.active_dialogue import DEFAULT_TOPICS
+    try:
+        p = profiles.load(role) if profiles is not None else None
+        persona = getattr(p, "system_prompt", "") if p else ""
+        partner = ""
+        if collaboration is not None:
+            turns = collaboration.snapshot().get("recent_turns", []) or []
+            others = [t for t in turns if t.get("role") != role and t.get("text")]
+            if others:
+                partner = "对方最近发言：" + str(others[-1].get("text", ""))[:80]
+        present = sorted(session.present_roles) if session is not None else []
+        companions = "在场搭档：" + "、".join(r for r in present if r != role)
+        prompt = (
+            "直播间有些冷场，请以{role}的身份主动发起一个轻松闲聊话题。"
+            "{companions}{partner}回复控制在两句话以内，不要使用表情符号。"
+        ).format(role=role, companions=companions, partner=partner)
+        resp = llm_orch._chat({"text": prompt, "system_prompt": persona, "history": []})
+        text = ((resp or {}).get("data") or {}).get("reply", "") or ""
+        if text and text.strip():
+            return {"text": text.strip(), "mood": "default"}
+    except Exception:
+        logger.warning("[Collab] 角色化话题生成失败，回退话题池 role=%s", role,
+                       exc_info=True)
+    return dict(random.choice(DEFAULT_TOPICS))
+
+
 def build_app_context():
     """装配全部组件，返回 Flask 应用与事件总线（便于测试复用）。"""
     event_bus = EventBus()
@@ -157,6 +192,18 @@ def build_app_context():
             awareness_enabled=bool((collab_cfg.get("awareness") or {}).get("enabled", True)),
         )
         collaboration.start()
+
+        # ---------- 冷场自发闲聊（Task 18）：active_dialogue 角色化 ----------
+        # LLM 调度官内部持有 ActiveDialogue 实例（llm_orchestrator._active，构造时已注入
+        # 通用 set_generator）；协作开启时追加 set_role_generator(fn)，使 tick(role) 可
+        # 生成带角色人设 + 对方最近发言的冷场话题。fn(role) -> {text, mood}，LLM 生成
+        # 失败回退 DEFAULT_TOPICS 话题池（见 _role_topic 注释）。
+        llm_orch = registry.get("llm")
+        active_dialogue = getattr(llm_orch, "_active", None) if llm_orch is not None else None
+        if active_dialogue is not None:
+            active_dialogue.set_role_generator(
+                lambda role: _role_topic(role, collab_profiles, session, collaboration,
+                                         llm_orch))
 
     # ---------- 运维：成本 / 熔断 / 看门狗 / 降级 / 崩溃 ----------
     cost_tracker = CostTracker(event_bus=event_bus)

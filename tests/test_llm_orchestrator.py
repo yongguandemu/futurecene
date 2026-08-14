@@ -4,7 +4,7 @@ import asyncio
 from src.orchestrators.llm_orchestrator import registry
 from src.orchestrators.llm_orchestrator.llm_orchestrator import LLMOrchestrator
 from src.shared.event_bus import EventBus
-from src.shared.events import LLM_FAILED, LLM_STREAM_CHUNK
+from src.shared.events import ACTIVE_DIALOGUE, LLM_FAILED, LLM_STREAM_CHUNK
 
 
 class FakeClient:
@@ -105,3 +105,58 @@ def test_unknown_capability():
 def test_health():
     orch, _ = _make_orchestrator()
     assert orch.health()["status"] == "ok"
+
+
+# =====================================================================
+# active_dialogue 角色化（Task 18）：tick(role) + role 透传
+# =====================================================================
+
+def _make_active(**overrides):
+    """构造 ActiveDialogue：冷却 0 / 静默 0 / 概率 1，绕过触发抑制。"""
+    from src.orchestrators.llm_orchestrator.active_dialogue import ActiveDialogue
+    cfg = {"min_cooldown": 0, "max_silence": 0, "trigger_probability": 1.0}
+    cfg.update(overrides)
+    bus = EventBus()
+    bus.reset()
+    ad = ActiveDialogue(event_bus=bus, config=cfg)
+    return ad, bus
+
+
+def test_active_dialogue_tick_role_passthrough():
+    """tick(role) 发布 dialogue:active 事件携带 role 字段（Task 18 透传）。"""
+    ad, bus = _make_active()
+    seen = {}
+    bus.subscribe(ACTIVE_DIALOGUE, lambda event, **kw: seen.update(kw))
+    ad.tick(role="lilith")
+    assert seen.get("role") == "lilith"
+    assert seen.get("text")
+
+
+def test_active_dialogue_tick_default_role_empty():
+    """tick() 无角色：事件 role 为空串（单角色兼容，既有行为不变）。"""
+    ad, bus = _make_active()
+    seen = {}
+    bus.subscribe(ACTIVE_DIALOGUE, lambda event, **kw: seen.update(kw))
+    ad.tick()
+    assert seen.get("role") == ""
+    assert seen.get("text")
+
+
+def test_active_dialogue_role_generator_preferred():
+    """set_role_generator(fn(role))：tick(role) 优先调用 role_generator（角色化）。"""
+    ad, bus = _make_active()
+    got_roles = []
+    ad.set_role_generator(lambda role: got_roles.append(role) or
+                          {"text": "角色化话题", "mood": "happy"})
+    result = ad.tick(role="yuki")
+    assert result == {"text": "角色化话题", "mood": "happy"}
+    assert got_roles == ["yuki"]
+
+
+def test_active_dialogue_role_generator_fallback_to_pool():
+    """role_generator 抛异常 → 回退话题池（DEFAULT_TOPICS 随机），不中断冷场。"""
+    ad, bus = _make_active()
+    ad.set_role_generator(lambda role: (_ for _ in ()).throw(RuntimeError("boom")))
+    result = ad.tick(role="lilith")
+    assert result is not None and result["text"].strip()
+    assert result["mood"]

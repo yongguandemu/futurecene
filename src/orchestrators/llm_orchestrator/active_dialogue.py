@@ -2,15 +2,19 @@
 
 无用户输入时定时触发主动话题，冷场救星。定时线程 + 话题池 + 用户活动感知。
 brain（LLM 文本生成函数）注入时优先生成，否则从内置话题池随机选取。
+多角色协作（Task 18）：tick(role) 支持按角色生成（set_role_generator 注入
+fn(role)->{text,mood}，角色化人设 + 对方最近发言），发布事件携带 role；
+未指定角色时保持既有 set_generator 单角色行为（向后兼容）。
 
 # 模块内容清单（8 项契约）
 1. 模块身份标识：llm 调度官 · active_dialogue · 能力 llm:active_dialogue
 2. 配置契约：min_interval(45) / max_interval(90) / min_cooldown(90) /
              max_silence(180) / trigger_probability(0.35) / enabled(True)
-3. 输入契约：tick() / notify_user_activity() / start() / stop() / get_status()
-4. 输出契约：tick 返回 {"text":str,"mood":str} 或 None；发布 dialogue:active 事件
-5. 依赖声明：event_bus（可选）；llm 生成函数经 set_generator() 注入（可选）
-6. 错误定义：generator 异常 → 回退话题池；event_bus 发布异常 → 记录日志不中断
+3. 输入契约：tick(role="") / notify_user_activity() / start() / stop() / get_status()
+4. 输出契约：tick 返回 {"text":str,"mood":str} 或 None；发布 dialogue:active 事件（含 role）
+5. 依赖声明：event_bus（可选）；llm 生成函数经 set_generator() 注入（可选）；
+             角色化生成函数经 set_role_generator() 注入（可选，fn(role)->{text,mood}）
+6. 错误定义：generator/role_generator 异常 → 回退话题池；event_bus 发布异常 → 记录日志不中断
 7. 生命周期方法：start() 启动守护线程，stop() 置位并 join；幂等
 8. 领域状态说明：_running / _last_active_time / _last_user_activity / _active_count
 """
@@ -56,6 +60,7 @@ class ActiveDialogue:
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
         self._generator: Optional[Callable[[], Any]] = None
+        self._role_generator: Optional[Callable[[str], Any]] = None
         self._last_active_time = 0.0
         self._last_user_activity = time.time()
         self._active_count = 0
@@ -68,6 +73,15 @@ class ActiveDialogue:
     def set_generator(self, fn: Callable[[], Any]):
         """注入主动话题生成函数（orchestrator 接线，避免直接依赖）。"""
         self._generator = fn
+
+    def set_role_generator(self, fn: Callable[[str], Any]):
+        """注入按角色生成话题的函数（fn(role) -> {text, mood}）。
+
+        多角色协作（Task 18）使用：tick(role) 指定角色时优先调用本函数生成
+        角色化话题（人设 + 对方最近发言），失败回退话题池；与 set_generator
+        并存——role 为空时保持既有 set_generator 行为（单角色兼容）。
+        """
+        self._role_generator = fn
 
     def set_event_bus(self, event_bus):
         self._bus = event_bus
@@ -109,15 +123,19 @@ class ActiveDialogue:
 
     # ---------- 触发 ----------
 
-    def tick(self) -> Optional[Dict[str, str]]:
-        """触发一次主动对话检查。满足条件则生成并发布，否则返回 None。"""
+    def tick(self, role: str = "") -> Optional[Dict[str, str]]:
+        """触发一次主动对话检查。满足条件则生成并发布，否则返回 None。
+
+        role 非空时按角色生成（多角色协作：role_generator 优先），发布事件
+        携带 role；role 为空时沿用既有 generator/话题池（单角色兼容）。
+        """
         now = time.time()
         if self._last_active_time > 0 and now - self._last_active_time < self.min_cooldown:
             return None
         silent = now - self._last_user_activity
         if silent < self.max_silence and random.random() > self.trigger_probability:
             return None
-        result = self._generate()
+        result = self._generate(role)
         if not result or not result.get("text"):
             return None
         text = result["text"].strip()
@@ -127,10 +145,10 @@ class ActiveDialogue:
         self._last_active_time = now
         self._active_count += 1
         self._last_result = {"text": text, "mood": mood}
-        self._publish(ACTIVE_DIALOGUE, text=text, mood=mood, source="active_dialogue",
-                      timestamp=now, count=self._active_count)
-        logger.info("[ActiveDialogue] 主动对话 #%d [%s]: %s",
-                    self._active_count, mood, text[:60])
+        self._publish(ACTIVE_DIALOGUE, text=text, mood=mood, role=role,
+                      source="active_dialogue", timestamp=now, count=self._active_count)
+        logger.info("[ActiveDialogue] 主动对话 #%d [%s] role=%s: %s",
+                    self._active_count, mood, role or "default", text[:60])
         return {"text": text, "mood": mood}
 
     def notify_user_activity(self):
@@ -162,7 +180,15 @@ class ActiveDialogue:
             except Exception as e:
                 logger.error("[ActiveDialogue] tick 异常: %s", e)
 
-    def _generate(self) -> Optional[Dict[str, str]]:
+    def _generate(self, role: str = "") -> Optional[Dict[str, str]]:
+        """生成主动话题：role 非空优先 role_generator(role)，否则 generator()，最后话题池。"""
+        if role and self._role_generator is not None:
+            try:
+                parsed = self._parse_generator_result(self._role_generator(role))
+                if parsed:
+                    return parsed
+            except Exception as e:
+                logger.warning("[ActiveDialogue] role_generator 失败，回退话题池: %s", e)
         if self._generator is not None:
             try:
                 parsed = self._parse_generator_result(self._generator())

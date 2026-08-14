@@ -178,6 +178,36 @@ def test_deferred_queue_drained_after_completion():
     co.stop()
 
 
+def test_active_dialogue_arbitrates_speaker():
+    """冷场自发闲聊（Task 18）：dialogue:active 无 role → 仲裁谁先说（∈ {yuki,lilith}）。"""
+    bus = EventBus()
+    pipeline = FakePipeline()
+    co = _make_coordinator(bus, pipeline=pipeline, trigger_probability=0.0,
+                           awareness_enabled=True)
+    co.start()
+    bus.publish("dialogue:active", text="大家晚上好呀", mood="happy")
+    # 异步执行：轮询等待执行线程完成
+    assert _wait_until(lambda: len(pipeline.calls) == 1), "冷场闲聊未执行"
+    assert pipeline.calls[0]["role"] in {"yuki", "lilith"}
+    assert pipeline.calls[0]["text"] == "大家晚上好呀"
+    assert pipeline.calls[0]["prompt_has_persona"] is True
+    assert _wait_until(lambda: co._tt.current_speaker is None), "互斥未释放"
+    co.stop()
+
+
+def test_active_dialogue_with_role_executes_directly():
+    """冷场自发闲聊（Task 18）：dialogue:active 带 role → 直接执行该角色，不走仲裁。"""
+    bus = EventBus()
+    pipeline = FakePipeline()
+    co = _make_coordinator(bus, pipeline=pipeline, trigger_probability=0.0)
+    co.start()
+    bus.publish("dialogue:active", text="大家好呀，我来开个话题", mood="happy", role="lilith")
+    assert _wait_until(lambda: len(pipeline.calls) == 1), "指定角色未直接执行"
+    assert pipeline.calls[0]["role"] == "lilith"
+    assert _wait_until(lambda: co._tt.current_speaker is None), "互斥未释放"
+    co.stop()
+
+
 def test_presence_change_syncs_single_source():
     """在场模型单一来源：session.present_roles 变化经 presence_changed 同步仲裁器与触发器。
 

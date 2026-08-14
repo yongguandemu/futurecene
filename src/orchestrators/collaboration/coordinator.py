@@ -12,14 +12,15 @@
 
 事件接线：
 - danmaku:received         → _on_danmaku（未启动/命令前缀过滤）→ 仲裁 → _execute
+- dialogue:active          → _on_active_dialogue（冷场闲聊：role 非空直发，否则仲裁 kind="active"）→ _execute
 - speech:completed         → 记录话轮（唯一记录点）+ triggers 评估 → 发布 collab:utterance_requested
 - collab:utterance_requested → _on_utterance_requested → request_utterance → 回仲裁 → _execute
 - character:presence_changed → _on_presence_changed → _sync_present_roles（在场名单单源同步，
   仲裁器 set_present_roles + 触发器 update_runtime(present_roles=...)，ADR-001 会话状态归指挥官）
 
 对外接口：start / stop / request_utterance / update_runtime / snapshot / flush。
-事件回调（EventBus 订阅）：_on_danmaku / _on_speech_completed / _on_utterance_requested /
-_on_presence_changed。
+事件回调（EventBus 订阅）：_on_danmaku / _on_active_dialogue / _on_speech_completed /
+_on_utterance_requested / _on_presence_changed。
 
 互斥语义：arbitrate 在 acquire 成功时放行并持锁至执行完成——执行在独立线程
 （collab-exec，_run_in_thread）中跑完 execute_with 后 finally 释放互斥并调用
@@ -38,6 +39,7 @@ from src.orchestrators.collaboration.context_manager import ContextManager
 from src.orchestrators.collaboration.triggers import CollabTriggers
 from src.orchestrators.collaboration.turn_tracker import TurnTracker
 from src.shared.events import (
+    ACTIVE_DIALOGUE,
     CHARACTER_PRESENCE_CHANGED,
     COLLAB_UTTERANCE_REQUESTED,
     DANMAKU_RECEIVED,
@@ -147,16 +149,18 @@ class CollaborationCoordinator:
         if self._started:
             return
         self._event_bus.subscribe(DANMAKU_RECEIVED, self._on_danmaku)
+        self._event_bus.subscribe(ACTIVE_DIALOGUE, self._on_active_dialogue)
         self._event_bus.subscribe(SPEECH_COMPLETED, self._on_speech_completed)
         self._event_bus.subscribe(COLLAB_UTTERANCE_REQUESTED, self._on_utterance_requested)
         self._event_bus.subscribe(CHARACTER_PRESENCE_CHANGED, self._on_presence_changed)
         self._started = True
-        logger.info("[Collaboration] 已启动（订阅 danmaku/speech/completed/utterance/presence）")
+        logger.info("[Collaboration] 已启动（订阅 danmaku/active/speech/completed/utterance/presence）")
 
     def stop(self) -> None:
         if not self._started:
             return
         self._event_bus.unsubscribe(DANMAKU_RECEIVED, self._on_danmaku)
+        self._event_bus.unsubscribe(ACTIVE_DIALOGUE, self._on_active_dialogue)
         self._event_bus.unsubscribe(SPEECH_COMPLETED, self._on_speech_completed)
         self._event_bus.unsubscribe(COLLAB_UTTERANCE_REQUESTED, self._on_utterance_requested)
         self._event_bus.unsubscribe(CHARACTER_PRESENCE_CHANGED, self._on_presence_changed)
@@ -173,6 +177,25 @@ class CollaborationCoordinator:
         verdict = self._arb.arbitrate("danmaku", text, user_name, kind="danmaku")
         if verdict.role:
             self._execute(verdict.role, text, kind="danmaku")
+
+    def _on_active_dialogue(self, event: str, text: str, mood: str = "default",
+                            role: str = "", **kw) -> None:
+        """冷场自发闲聊（Task 18）：active_dialogue 主动话题 → 仲裁谁先说 → 执行。
+
+        - role 非空：话题已指定角色（角色化生成，如 tick(role)），直接执行不再仲裁；
+        - role 为空：走仲裁（kind="active"，冷场发言优先级低于用户弹幕与接话）。
+        """
+        if not self._started:
+            return
+        text = (text or "").strip()
+        if not text:
+            return
+        if role:
+            self._execute(role, text, kind="active")
+            return
+        verdict = self._arb.arbitrate("active", text, "", kind="active")
+        if verdict.role:
+            self._execute(verdict.role, text, kind="active")
 
     def _on_speech_completed(self, event: str, role: str, text: str = "",
                              audio_id: str = "", **kw) -> None:

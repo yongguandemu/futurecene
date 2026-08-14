@@ -4,6 +4,48 @@
 mention(@指定,硬放行) > intent(系统意图→lead) > relevance(关键词加权) >
 cooldown(闲置最久) > random(平局随机 + 记录取反)。
 零 LLM：全部为确定性文本规则。
+
+# 模块内容清单 — rules
+
+## 1. 模块身份标识
+- 所属调度官：collaboration（多角色协作域）
+- 能力名：collab:arbitrate 的规则来源（间接）
+
+## 2. 配置契约
+| 配置项 | 必填 | 默认值 | 类型/范围 | 说明 |
+|--------|------|--------|-----------|------|
+| 无实例配置 | - | - | - | 规则工厂函数 build_default_rules(seed) / make_rules_by_order(names, seed) |
+| _INTENT_WORDS / _MENTION_LANG | 否 | 内置 | set/dict | 意图词表与角色别名表（模块级常量，可扩展） |
+
+## 3. 输入契约
+- 输入格式：`rule.evaluate(ctx: ArbitrationContext) -> RuleVerdict`
+- ctx：ArbitrationContext（text/user_name/source/kind/lead_role/present_roles/profiles/turn_tracker）
+- 工厂：`build_default_rules(seed)` / `make_rules_by_order(names, seed)` 返回 Rule 列表
+
+## 4. 输出契约
+- 成功：返回 RuleVerdict(role, confidence, reason)；未命中时 role=None
+- 失败：无异常路径（各规则内部容错）
+- 事件：无（规则结果由 arbitrator 汇总发布）
+
+## 5. 依赖声明
+- 外部服务：无
+- 内部模块：re、random、typing（纯标准库）
+- 预先配置：无
+
+## 6. 错误定义
+| 错误类型 | 触发条件 | 处理建议 |
+|----------|----------|----------|
+| 无（纯函数） | - | 条件判定失败即返回 role=None |
+
+## 7. 生命周期方法
+| 方法 | 必须 | 行为 |
+|------|------|------|
+| start/stop | 否 | 无（纯规则对象） |
+
+## 8. 领域状态说明
+- 状态项：`_MENTION_PATTERNS`（模块级编译的 @点名正则）、各规则实例的运行时字段
+- 持久化：无
+- 恢复：工厂函数每次构建全新规则链
 """
 import logging
 import random

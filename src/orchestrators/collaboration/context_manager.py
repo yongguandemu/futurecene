@@ -1,4 +1,47 @@
-"""context_manager.py — 多角色上下文：每角色独立记忆分桶 + 全局对话流 + 感知彼此注入。"""
+"""context_manager.py — 多角色上下文：每角色独立记忆分桶 + 全局对话流 + 感知彼此注入。
+
+# 模块内容清单 — context_manager
+
+## 1. 模块身份标识
+- 所属调度官：collaboration（多角色协作域）
+- 能力名：collab:context（多角色上下文组装，间接）
+
+## 2. 配置契约
+| 配置项 | 必填 | 默认值 | 类型/范围 | 说明 |
+|--------|------|--------|-----------|------|
+| session_id | 否 | "default" | str | 会话标识（记忆分桶前缀） |
+| max_transcript | 否 | 50 | int，>=1 | 全局对话流上限 |
+| max_partner_lines | 否 | 2 | int，>=1 | 「感知彼此」注入的对方最近发言条数 |
+
+## 3. 输入契约
+- 输入格式：`memory_key(role)` / `record_turn(role, text)` / `global_transcript(limit)` / `partner_lines(speaker, limit)` / `build_system_prompt(role, base_prompt, awareness_enabled, partner_lines)`
+- role/speaker：str，角色名；text：str，发言文本
+
+## 4. 输出契约
+- 成功：`memory_key()` 返回 str（记忆分桶键）；`global_transcript()/partner_lines()` 返回 str 列表；`build_system_prompt()` 返回 str（组合后的系统提示）
+- 失败：无异常路径（文本为空时静默跳过）
+- 事件：无
+
+## 5. 依赖声明
+- 外部服务：无
+- 内部模块：typing（纯标准库）
+- 预先配置：无
+
+## 6. 错误定义
+| 错误类型 | 触发条件 | 处理建议 |
+|----------|----------|----------|
+| 无（纯内存结构） | - | 空文本直接忽略 |
+
+## 7. 生命周期方法
+| 方法 | 必须 | 行为 |
+|------|------|------|
+| start/stop | 否 | 无（随 coordinator 生命周期） |
+
+## 8. 领域状态说明
+- 状态项：`_transcript`（全局对话流环形缓冲，上限 max_transcript）
+- 持久化：无（记忆持久化由 memory 调度官按 memory_key 分桶负责）
+- 恢复：无（对话流随进程生命周期）
+"""
 from typing import List, Optional
 
 

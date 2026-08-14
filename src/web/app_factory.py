@@ -34,6 +34,7 @@ from src.orchestrators.collaboration.coordinator import (
     COLLAB_RUNTIME_FIELDS, coerce_runtime_field,
 )
 from src.web.routes import command as command_route
+from src.web.routes import danmaku as danmaku_route
 from src.web.routes import health as health_route
 from src.web.routes import state as state_route
 from src.web.routes import switch as switch_route
@@ -52,6 +53,7 @@ def create_app(context: Optional[Dict] = None) -> Flask:
     app.register_blueprint(state_route.bp)
     app.register_blueprint(command_route.bp)
     app.register_blueprint(switch_route.bp)
+    app.register_blueprint(danmaku_route.bp)
 
     ws_route.init_ws(app, context.get("event_bus"),
                      seq_provider=lambda: context.get("event_bus").current_seq()

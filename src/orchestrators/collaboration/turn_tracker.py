@@ -6,6 +6,48 @@ dequeue() 返回 None 的两种情形：
 
 队列仲裁由协调器在 release 后驱动：release() 返回 True（成功释放）后，
 协调器应调用 dequeue() 取出下一话轮。
+
+# 模块内容清单 — turn_tracker
+
+## 1. 模块身份标识
+- 所属调度官：collaboration（多角色协作域）
+- 能力名：collab:arbitrate 的互斥/队列支撑（间接）
+
+## 2. 配置契约
+| 配置项 | 必填 | 默认值 | 类型/范围 | 说明 |
+|--------|------|--------|-----------|------|
+| 无 | - | - | - | 纯内存数据结构，构造即就绪 |
+
+## 3. 输入契约
+- 输入格式：`acquire(role)` / `release(role)` / `enqueue(request)` / `dequeue()` / `idle_seconds(role)` / `record_turn(role, kind, ref_text, text)` / `turn_history(limit)` / `current_speaker` / `pending_count()`
+- role：str，角色名；request：dict（含 role/priority/text/ref_text）
+
+## 4. 输出契约
+- 成功：`acquire()/release()/enqueue()` 返回 bool；`dequeue()` 返回队首 request 或 `None`；`idle_seconds()` 返回 float（未发言为 inf）；`turn_history()` 返回 dict 列表；`current_speaker` 返回 str 或 `None`
+- 失败：`release()` 角色不匹配返回 `False` 并警告；`enqueue()` 缺 role 拒绝返回 `False`
+- 事件：无
+
+## 5. 依赖声明
+- 外部服务：无
+- 内部模块：heapq、threading、time、logging（纯标准库）
+- 预先配置：无
+
+## 6. 错误定义
+| 错误类型 | 触发条件 | 处理建议 |
+|----------|----------|----------|
+| 释放角色不匹配 | release 时 _current != role | 返回 False，记录警告 |
+| 入队拒绝 | request 缺 role 或非字符串 | 返回 False，记录警告 |
+| 队列堆积 | 长期无人 release | 由 coordinator 保证 finally 释放互斥 |
+
+## 7. 生命周期方法
+| 方法 | 必须 | 行为 |
+|------|------|------|
+| start/stop | 否 | 无（纯数据结构，随仲裁器生命周期） |
+
+## 8. 领域状态说明
+- 状态项：`_current`（当前发言人）、`_queue`（优先级堆）、`_last_speech`（角色→最近发言时间）、`_history`（话轮历史，上限 200）
+- 持久化：无
+- 恢复：无（互斥与队列随进程生命周期）
 """
 import heapq
 import logging

@@ -3,6 +3,58 @@
 组装 arbitrator/turn_tracker/context_manager/triggers，订阅事件并驱动
 执行器（pipeline）按角色执行。
 
+# 模块内容清单 — coordinator
+
+## 1. 模块身份标识
+- 所属调度官：collaboration（多角色协作域）
+- 能力名：collab:coordinator（协作顶层编排，聚合仲裁/话轮/上下文/触发）
+
+## 2. 配置契约
+| 配置项 | 必填 | 默认值 | 类型/范围 | 说明 |
+|--------|------|--------|-----------|------|
+| lead_role | 否 | "yuki" | str | 主控角色（传给仲裁器） |
+| rules_order | 否 | 无 | list[str] | 仲裁规则链顺序 |
+| trigger_probability | 否 | 0.3 | float，0.0-1.0 | 接话触发概率 |
+| trigger_global_cooldown | 否 | 20.0 | float，>0 | 接话触发冷却 |
+| awareness_enabled | 否 | True | bool | 「感知彼此」上下文注入开关 |
+| seed | 否 | None | int | 随机种子 |
+| COLLAB_RUNTIME_FIELDS | 否 | 4 字段 | frozenset | 运行时调参白名单（与 POST /api/collab/config 共用单一来源） |
+
+## 3. 输入契约
+- 输入格式：`start()` / `stop()` / `request_utterance(role, kind, reason, ref_text)` / `update_runtime(payload)` / `snapshot()` / `flush()`
+- 事件订阅（EventBus）：`danmaku:received` / `dialogue:active` / `speech:completed` / `collab:utterance_requested` / `character:presence_changed`
+- 执行器协议：注入对象须实现 `async execute_with(text, role, system_prompt, turn_context) -> dict`
+
+## 4. 输出契约
+- 成功：`snapshot()` 返回 dict（在场角色/当前发言人/待发队列等）；`update_runtime()` 返回 (ok, coerced, error)；`flush()` 强制落盘上下文
+- 失败：运行时字段非法返回 (False, None, 错误消息)
+- 事件：发布 `collab:utterance_requested`（role/kind/reason/ref_text）；执行完成后由 pipeline 发布 `speech:completed`
+
+## 5. 依赖声明
+- 外部服务：无（执行器 pipeline 由调用方注入）
+- 内部模块：`arbitrator`、`turn_tracker`、`context_manager`、`triggers`、`shared.events`（5 个协作事件）
+- 预先配置：执行器 pipeline 必须注入（真实实现为 DanmakuPipeline）
+
+## 6. 错误定义
+| 错误类型 | 触发条件 | 处理建议 |
+|----------|----------|----------|
+| 执行器异常 | execute_with 抛异常 | finally 释放互斥，不泄漏锁 |
+| 运行时字段非法 | update_runtime 收到未知/非法字段 | 返回 (False, None, 错误消息) |
+| 事件回调异常 | 单个事件处理异常 | 记录警告，不中断其他订阅 |
+
+## 7. 生命周期方法
+| 方法 | 必须 | 行为 |
+|------|------|------|
+| start | 是 | 订阅全部协作事件 |
+| stop | 是 | 取消订阅并清理 |
+
+## 8. 领域状态说明
+- 状态项：仲裁器 / 话轮追踪 / 触发器 / 上下文管理器（四组件聚合）、在场名单（单一来源同步）、执行线程（collab-exec daemon）
+- 持久化：上下文对话流（flush 落盘，由调用方触发）
+- 恢复：start 重建订阅；互斥状态由 turn_tracker 持有
+
+补充设计说明：
+
 执行器协议（契约）：
     async def execute_with(text, role, system_prompt, turn_context) -> dict
 - text: 发言文本；role: 角色名；system_prompt: 组合后的系统提示；

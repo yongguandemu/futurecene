@@ -4,6 +4,54 @@ arbitrate(source, text, ...) → 依次应用规则链；当前有人发言时�
 verdict.deferred=True 表示"排队待发"，False 表示放行或无人回应。
 发布 speech:arbitrated（role/rule_hit/request_id/deferred）供前端展示与调试。
 零 LLM：规则全部为确定性文本规则（rules.py）。
+
+# 模块内容清单 — arbitrator
+
+## 1. 模块身份标识
+- 所属调度官：collaboration（多角色协作域）
+- 能力名：collab:arbitrate（发言权仲裁，间接经 coordinator 调用）
+
+## 2. 配置契约
+| 配置项 | 必填 | 默认值 | 类型/范围 | 说明 |
+|--------|------|--------|-----------|------|
+| rules_order | 否 | 无 | list[str] | 规则链顺序（缺省 build_default_rules：mention>intent>relevance>cooldown>random） |
+| lead_role | 否 | "yuki" | str | 主控角色（intent 规则命中时放行） |
+| seed | 否 | None | int | 随机种子（random 规则可复现） |
+| present_roles | 否 | None | set[str] | 在场角色（ADR-001 单一来源，None 回退 profiles/默认双人组） |
+| profiles | 否 | None | CharacterProfileLoader 兼容 | 角色关键词（relevance 规则用） |
+
+## 3. 输入契约
+- 输入格式：`arbitrate(source, text, user_name, kind, requester_role, ref_text)` -> ArbitrationVerdict
+- source：str，消息来源（danmaku/collab/active）
+- text：str，发言文本；user_name：str，观众名
+- kind：str ∈ {danmaku, collab, active}；ref_text：str，引用文本
+
+## 4. 输出契约
+- 成功：返回 ArbitrationVerdict(role, rule_hit, request_id, deferred)；放行时 role 非 None
+- 失败：规则链未命中返回 role=None（静默，合法决策）；互斥占用返回 role=None 且 deferred=True（入队待发）
+- 事件：发布 `speech:arbitrated`（role/rule_hit/request_id/deferred）；决策日志见 decision_log
+
+## 5. 依赖声明
+- 外部服务：无
+- 内部模块：`rules`（规则链）、`turn_tracker`（互斥/队列）、`shared.events.SPEECH_ARBITRATED`、`shared.decision_log`（可选）
+- 预先配置：无（rules_order 缺省时自动构建默认规则链）
+
+## 6. 错误定义
+| 错误类型 | 触发条件 | 处理建议 |
+|----------|----------|----------|
+| 规则异常 | 单条规则 evaluate 抛异常 | 由规则实现方捕获，仲裁器不中断 |
+| 事件发布失败 | event_bus 异常 | 记录警告，不阻断仲裁 |
+
+## 7. 生命周期方法
+| 方法 | 必须 | 行为 |
+|------|------|------|
+| start/stop | 否 | 无（由 coordinator 持有并调用） |
+| set_profiles / set_lead_role / set_present_roles | 是 | 运行时更新角色配置 |
+
+## 8. 领域状态说明
+- 状态项：`_rules`（规则链）、`_tt`（话轮追踪引用）、`_lead_role`、`_profiles`、`_present`（在场角色）
+- 持久化：无
+- 恢复：无状态持久化；互斥与队列状态由 turn_tracker 持有
 """
 import logging
 import uuid

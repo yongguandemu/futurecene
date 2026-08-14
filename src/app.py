@@ -121,7 +121,8 @@ def build_app_context():
                                tts_orchestrator=tts_orch,
                                safety_orchestrator=safety_orch,
                                memory_orchestrator=memory_orch,
-                               switch_manager=switch_manager)
+                               switch_manager=switch_manager,
+                               session=session)
     pipeline.start()
 
     # ---------- 运维：成本 / 熔断 / 看门狗 / 降级 / 崩溃 ----------

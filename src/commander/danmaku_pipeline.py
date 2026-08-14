@@ -14,9 +14,9 @@
 
 # 模块内容清单（8 项契约）
 1. 模块身份标识：commander · DanmakuPipeline · 对外 start()/stop()（订阅 danmaku:received）
-2. 配置契约：无独立配置；依赖注入 llm/tts/safety/memory 调度官实例与 switch_manager
+2. 配置契约：无独立配置；依赖注入 llm/tts/safety/memory 调度官实例、switch_manager 与 SessionContext（角色实时读取）
 3. 输入契约：订阅 danmaku:received（content/user_name）；! 前缀系统命令跳过
-4. 输出契约：发布 FRONTEND_SUBTITLE_UPDATE/AUDIENCE_FILTERED；调用各调度官 handle（safety/memory/llm/tts）；触发 tts:audio_ready 供 Live2D 订阅
+4. 输出契约：发布 FRONTEND_SUBTITLE_UPDATE/AUDIENCE_FILTERED；调用各调度官 handle（safety/memory/llm/tts）；触发 tts:audio_ready 供 Live2D 订阅；字幕/LLM/TTS 携带当前角色（SessionContext 实时值，未注入回退 yuki）
 5. 依赖声明：asyncio、logging、typing、shared.events
 6. 错误定义：各环节失败仅记录日志并跳过（不级联）；LLM 未注入跳过
 7. 生命周期方法：start()/stop()
@@ -42,13 +42,14 @@ class DanmakuPipeline:
 
     def __init__(self, event_bus, llm_orchestrator=None, tts_orchestrator=None,
                  safety_orchestrator=None, memory_orchestrator=None,
-                 switch_manager=None):
+                 switch_manager=None, session=None):
         self._event_bus = event_bus
         self._llm = llm_orchestrator
         self._tts = tts_orchestrator
         self._safety = safety_orchestrator
         self._memory = memory_orchestrator
         self._switch_manager = switch_manager
+        self._session = session  # SessionContext（可选注入，角色实时读取）
         self._started = False
 
     def start(self) -> None:
@@ -64,6 +65,12 @@ class DanmakuPipeline:
             self._started = False
 
     # ---------- 入口（EventBus 同步回调） ----------
+
+    def _current_role(self) -> str:
+        """当前角色：实时读取 SessionContext，未注入时回退 yuki（不缓存）。"""
+        if self._session is not None:
+            return getattr(self._session, "role", "yuki") or "yuki"
+        return "yuki"
 
     def _on_danmaku(self, event: str, content: str, user_name: str = "", **kwargs) -> None:
         text = (content or "").strip()
@@ -102,7 +109,8 @@ class DanmakuPipeline:
 
         # 5. 字幕事件（前端 subtitle_overlay 消费）
         self._event_bus.publish(FRONTEND_SUBTITLE_UPDATE,
-                                text=reply_text, role="yuki", user_name=user_name)
+                                text=reply_text, role=self._current_role(),
+                                user_name=user_name)
 
         # 6. TTS 合成（发布 tts:audio_ready → Live2D 口型，表达领域订阅）
         await self._synthesize(reply_text)
@@ -144,7 +152,8 @@ class DanmakuPipeline:
         try:
             result = await self._llm.handle({
                 "capability": "llm:chat",
-                "payload": {"text": text, "role": "yuki", "history": history},
+                "payload": {"text": text, "role": self._current_role(),
+                            "history": history},
             })
         except Exception as e:
             logger.error("[DanmakuPipeline] LLM 调用异常: %s", e)
@@ -176,7 +185,7 @@ class DanmakuPipeline:
             capability = "tts:stream_synthesize" if len(reply_text) > 80 else "tts:synthesize"
             result = await self._tts.handle({
                 "capability": capability,
-                "payload": {"text": reply_text, "role": "yuki"},
+                "payload": {"text": reply_text, "role": self._current_role()},
             })
             if result.get("ok"):
                 logger.info("[DanmakuPipeline] TTS 合成完成 audio_id=%s",

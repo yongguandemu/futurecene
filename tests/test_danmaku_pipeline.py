@@ -1,5 +1,6 @@
 """test_danmaku_pipeline.py — 弹幕→对话管线（规格书 9.2，指挥官层订阅）"""
 from src.commander.danmaku_pipeline import DanmakuPipeline
+from src.commander.session_context import SessionContext
 from src.shared.event_bus import EventBus
 from src.shared.events import DANMAKU_RECEIVED, FRONTEND_SUBTITLE_UPDATE
 
@@ -26,10 +27,11 @@ class FakeTTS:
         return {"ok": True, "data": {"audio_id": "audio-1", "duration_ms": 100}, "error": None}
 
 
-def _make_pipeline(llm=None, tts=None):
+def _make_pipeline(llm=None, tts=None, session=None):
     bus = EventBus()
     bus.reset()
-    pipe = DanmakuPipeline(event_bus=bus, llm_orchestrator=llm, tts_orchestrator=tts)
+    pipe = DanmakuPipeline(event_bus=bus, llm_orchestrator=llm, tts_orchestrator=tts,
+                           session=session)
     pipe.start()
     return pipe, bus
 
@@ -48,6 +50,28 @@ def test_danmaku_triggers_llm_and_subtitle():
     assert llm.calls and llm.calls[0]["capability"] == "llm:chat"
     seen.pop("seq", None)  # seq 为事件元数据，不属于业务载荷
     assert seen == {"text": "你好呀", "role": "yuki", "user_name": "观众"}
+
+
+def test_role_reads_from_session_context():
+    """角色实时取自 SessionContext：切换后字幕/LLM/TTS 均使用当前角色。"""
+    llm = FakeLLM(reply="你好呀")
+    tts = FakeTTS()
+    session = SessionContext(session_id="default", role="lilith")
+    pipe, bus = _make_pipeline(llm=llm, tts=tts, session=session)
+    seen = {}
+    bus.subscribe(FRONTEND_SUBTITLE_UPDATE, lambda event, **kw: seen.update(kw))
+    _publish_danmaku(bus)
+    # 字幕事件 role
+    seen.pop("seq", None)
+    assert seen["role"] == "lilith"
+    # LLM payload role
+    assert llm.calls[0]["payload"]["role"] == "lilith"
+    # TTS payload role
+    assert tts.calls[0]["payload"]["role"] == "lilith"
+    # 切换角色后实时生效（不缓存）
+    session.switch_role("yuki")
+    _publish_danmaku(bus)
+    assert llm.calls[1]["payload"]["role"] == "yuki"
 
 
 def test_system_command_skipped():

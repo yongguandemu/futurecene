@@ -14,6 +14,9 @@ llm:
     model: ${{ env.ZHIPU_MODEL }}           # glm-4.7-flashx（免费快速兜底，与 .env 保持一致）
 
 tts:
+  # 本机播放：TTS 合成后直接在本机扬声器播放（无前端浏览器/直播测试台场景）。
+  # 前端（live2d_stream）打开时会与浏览器播放叠加，OBS 正式直播建议关闭。
+  local_playback: true
   primary_engine: wusound
   fallback_chain: [wusound, cosyvoice]
   wusound:

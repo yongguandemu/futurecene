@@ -169,6 +169,16 @@ def build_app_context():
                                profile_loader=profile_loader)
     pipeline.start()
 
+    # ---------- 本机 TTS 播放（直播测试台 · 无前端浏览器场景） ----------
+    # tts.local_playback=true 时订阅 tts:audio_ready，把合成音频播放到本机扬声器；
+    # 前端（live2d_stream）打开时会与浏览器播放叠加，OBS 正式直播建议关闭该开关。
+    if config_loader.get("tts.local_playback", False):
+        from src.orchestrators.tts_orchestrator.local_player import LocalTTSSpeaker
+        local_tts = LocalTTSSpeaker(
+            event_bus,
+            cache_dir=str(getattr(tts_orch, "_cache_dir", "") or ""))
+        local_tts.start()
+
     # ---------- 冷场主动对话（直播测试台 · 主动模式） ----------
     # LLM 调度官内部持有 ActiveDialogue（构造时创建）；此处绑定 EventBus 并启动，
     # 使冷场自发闲聊真正生效（此前仅 COLLAB_ENABLED 时注入角色生成器，引擎不启动）。

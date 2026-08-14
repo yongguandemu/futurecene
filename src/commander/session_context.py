@@ -58,9 +58,10 @@ class SessionContext:
             return False
         self.present_roles.discard(role)
         if role == self.role:
-            self.role = "yuki" if "yuki" in self.present_roles else min(self.present_roles)
+            self.role = ("yuki" if "yuki" in self.present_roles
+                         else (min(self.present_roles) if self.present_roles else "yuki"))
         if role == self.lead_role:
-            self.lead_role = self.role
+            self.lead_role = self.role  # 委托已兜底的 self.role，无空集风险
         if self._event_bus is not None:
             self._event_bus.publish(CHARACTER_PRESENCE_CHANGED, role=role,
                                     present=False, session_id=self.session_id)

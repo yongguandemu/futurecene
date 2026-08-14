@@ -26,6 +26,15 @@ def test_presence_model():
     assert session.present_roles == {"yuki"}
 
 
+def test_remove_last_role_safe():
+    """移除唯一在场角色：不抛异常、返回 True、present_roles 为空、role/lead_role 回退 yuki。"""
+    session = SessionContext(session_id="default")
+    assert session.remove_role("yuki") is True
+    assert session.present_roles == set()
+    assert session.role == "yuki"
+    assert session.lead_role == "yuki"
+
+
 def test_switch_role_compat():
     bus = EventBus()
     session = SessionContext(session_id="default")

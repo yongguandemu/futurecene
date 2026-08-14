@@ -83,7 +83,8 @@ def create_app(context: Optional[Dict] = None) -> Flask:
 
     @app.get("/assistant/")
     def assistant():
-        return send_from_directory(_FRONTEND_DIR / "assistant", "index.html")
+        # UI 合并（方案 A）：助手并入 dashboard 智能助手视图
+        return redirect("/dashboard/#assistant")
 
     # 共享静态资源：设计令牌 / vendor 库 / Live2D 模型等（规格书 12.1）
     @app.get("/assets/<path:filename>")

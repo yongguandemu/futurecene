@@ -122,3 +122,11 @@ def test_state_returns_version():
     data = resp.get_json()
     assert "version" in data
     assert isinstance(data["version"], int)
+
+
+def test_assistant_redirects_to_dashboard():
+    app = create_app(_make_context())
+    client = app.test_client()
+    resp = client.get("/assistant/")
+    assert resp.status_code == 302
+    assert "/dashboard/#assistant" in resp.headers["Location"]

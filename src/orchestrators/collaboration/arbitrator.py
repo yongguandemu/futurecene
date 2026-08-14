@@ -1,13 +1,13 @@
 """arbitrator.py — 发言权仲裁器（核心）。
 
-arbitrate(request) → 依次应用规则链；当前有人发言时请求入待发队列。
-发布 speech:arbitrated（role/rule_hit/request_id）供前端展示与调试。
+arbitrate(source, text, ...) → 依次应用规则链；当前有人发言时请求入待发队列，
+verdict.deferred=True 表示"排队待发"，False 表示放行或无人回应。
+发布 speech:arbitrated（role/rule_hit/request_id/deferred）供前端展示与调试。
 零 LLM：规则全部为确定性文本规则（rules.py）。
 """
 import logging
-import threading
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Optional
 
 from src.orchestrators.collaboration.rules import (
@@ -24,6 +24,7 @@ class ArbitrationVerdict:
     role: Optional[str]
     rule_hit: str = ""
     request_id: str = ""
+    deferred: bool = False          # True=排队待发（互斥忙）；False=放行或无人回应
 
 
 class SpeakerArbitrator:
@@ -34,7 +35,7 @@ class SpeakerArbitrator:
         self._tt = turn_tracker or TurnTracker()
         self._profiles = profiles
         self._lead_role = lead_role
-        self._rules: List[Rule] = (make_rules_by_order(rules_order)
+        self._rules: List[Rule] = (make_rules_by_order(rules_order, seed=seed)
                                    if rules_order else build_default_rules(seed=seed))
 
     def set_profiles(self, profiles) -> None:
@@ -61,16 +62,16 @@ class SpeakerArbitrator:
                 hit = verdict.reason
                 break
         if winner is None:
-            return ArbitrationVerdict(None, hit, request_id)
+            return ArbitrationVerdict(None, hit, request_id, deferred=False)
 
         request = {"role": winner, "priority": self._priority(kind, hit),
                    "request_id": request_id, "text": text, "ref_text": ref_text}
         if not self._tt.acquire(winner):
             self._tt.enqueue(request)     # 有人正发言：入队等待
             self._publish(winner, hit, request_id, deferred=True)
-            return ArbitrationVerdict(None, hit, request_id)
+            return ArbitrationVerdict(None, hit, request_id, deferred=True)
         self._publish(winner, hit, request_id, deferred=False)
-        return ArbitrationVerdict(winner, hit, request_id)
+        return ArbitrationVerdict(winner, hit, request_id, deferred=False)
 
     @staticmethod
     def _priority(kind: str, hit: str) -> int:

@@ -31,7 +31,7 @@
 | 前端 `live2d_stream/` | `MODEL_URL` 硬编码"小恶魔"，单 PIXI stage 单模型居中 | 双模型同台渲染 |
 | 前端表情/动作 | `setExpression` 直接 `model.expression(语义名)`，**无映射表**（小恶魔中文表情名"头发/唱歌…"，语义"开心"等静默失败） | 需 per-model `expression_map`/`motion_map`（现有潜在缺陷 + 跨模型适配点） |
 | 前端 store/assistant | `session.role` 单值；assistant 已有角色卡片 UI | 状态需按角色维度扩展 |
-| 资产 | V2 `assets/live2d/` 仅有"小恶魔"模型 | Lilith 模型资产缺失（旧项目 Haru/Hiyori 可迁移） |
+| 资产 | V2 `assets/live2d/` 仅有"小恶魔"模型 | 双角色形象：Yuki 迁移旧项目 Hiyori；Lilith 沿用现有"小恶魔"；Haru 留作备选 |
 
 ---
 
@@ -325,19 +325,30 @@ collaboration:
 - 单 `PIXI.Application` stage，加载两个 `Live2DModel`（pixi-live2d-display 原生支持多模型）。
 - 布局：左右分列（Yuki 左 / Lilith 右），位置/缩放由页面配置或 `/api/characters` 下发（`roles[].live2d_model`、`position`、`scale`）。
 - 模型 URL：不再硬编码，从 `roles[].live2d_model` 映射（`/assets/live2d/{model}/{model}.model3.json`）。
-- **Lilith 模型来源（评审确认）**：迁移旧项目 `Haru` 模型（核验：`Haru.model3.json` 为 Cubism 3 —— `Version:3` + moc3/physics3/pose3/cdi3，与 V2 现有"小恶魔"同格式、同运行时 pixi-live2d-display + live2dcubismcore，兼容性高）。迁移 = 拷贝 `assets/live2d/Haru/` 目录 + 配置映射，约 0.5 天，不威胁工期。若决赛时间紧，备选降级：两角色共用"小恶魔"模型 + 换色/标签区分（零资产工期，仅做角色视觉标识）。
-- **per-model 表情/动作映射（评审确认，跨模型适配必做）**：不同模型的表情/动作命名各异（小恶魔表情为中文"头发/唱歌…"，Haru 为 `F01-F05`；动作小恶魔为 `wave/nod/shake/idle`，Haru 为 `haru_g_m01..m20`），且现有前端 `model.expression(语义名)` 直接透传、无映射表（语义表情静默失败）。新增 `roles[].expression_map`/`motion_map`：
+- **模型来源（评审调整：Yuki=Hiyori，Lilith=小恶魔）**：
+  - Yuki 形象：迁移旧项目 `Hiyori` 模型（核验：`Hiyori.model3.json` 为 Cubism 3 —— `Version:3` + moc3/physics3/pose3/cdi3 + 9 个 Idle 动作 + 标准 LipSync 参数组 `ParamMouthOpenY`，与 V2 运行时 pixi-live2d-display + live2dcubismcore 兼容）。迁移 = 拷贝 `assets/live2d/Hiyori/` 目录 + 配置映射，约 0.5 天。
+  - Lilith 形象：**沿用 V2 现有"小恶魔"模型**（零迁移成本）；Haru 留作备选/第三形象。
+  - **Hiyori 无表情文件**（model3.json 无 Expressions 段）→ `expression_map` 留空，语义表情事件映射缺失时跳过（不崩溃），表情表达靠动作 + 口型承担。
+  - 若决赛时间紧，可全部共用单模型 + 换色/标签区分（零资产工期，仅做角色视觉标识）。
+- **Hiyori 呼吸动作限制（评审确认：呼吸丰富需在驱动中限制）**：Hiyori 的 Idle 动作组（m01-m10）含较强呼吸循环，若交由运行时自动循环播放会过于抢眼。限制机制：
+  - `roles[].restrict_breath: true`（Hiyori 默认开）+ `roles[].idle_silent_motion`（静默态专用低动作 idle，P1 实施时浏览器实测选定呼吸最弱的动作，如 `Hiyori_m03`/`Hiyori_m10`）。
+  - 前端驱动改为**显式状态机**：`SILENT`（只播 `idle_silent_motion`，不依赖运行时自动 idle 循环）→ `TALKING`（talking 动作 + 口型）→ `SILENT`（200ms 过渡收尾）。未发言角色始终处于受控 SILENT，呼吸动作被压制。
+  - 可选增强（P3）：参数层限制（锁定 `ParamBodyAngleX`/`ParamAngleX` 等呼吸参数摆动范围），实施时如 motion 控制已满足则不实现（YAGNI）。
+- **per-model 表情/动作映射（评审确认，跨模型适配必做）**：不同模型的表情/动作命名各异（小恶魔表情为中文"头发/唱歌…"，动作 `wave/nod/shake/idle`；Hiyori 无表情、动作为 `Hiyori_m01..m10`），且现有前端 `model.expression(语义名)` 直接透传、无映射表（语义表情静默失败）。新增 `roles[].expression_map`/`motion_map`：
 
   ```yaml
   roles:
     - name: yuki
+      live2d_model: Hiyori
+      restrict_breath: true
+      idle_silent_motion: Hiyori_m03      # 静默态低动作 idle（呼吸最弱，P1 实测选定）
+      expression_map: {}                  # Hiyori 无表情文件 → 语义表情跳过
+      motion_map: {wave: Hiyori_m01, nod: Hiyori_m02, shake: Hiyori_m05, idle: Hiyori_m01}
+    - name: lilith
       live2d_model: 小恶魔
+      restrict_breath: false
       expression_map: {开心: 唱歌, 难过: 流泪, 惊讶: 头发, 害羞: 嘟嘴, 生气: 脸黑, 平静: 头发}
       motion_map: {wave: wave, nod: nod, shake: shake, idle: idle}
-    - name: lilith
-      live2d_model: Haru
-      expression_map: {开心: F01, 难过: F03, 惊讶: F02, 害羞: F04, 生气: F05, 平静: F01}
-      motion_map: {wave: haru_g_m01, nod: haru_g_m03, shake: haru_g_m05, idle: haru_g_idle}
   ```
 
   前端收到语义事件后先经映射表再调用 `model.expression/motion`；映射缺失时跳过（不崩溃）。此映射同时修复现有单模型的表情失效缺陷。
@@ -383,9 +394,9 @@ collaboration:
 
 ### P1 · 双模型渲染（前端可见性先行）— 约 2-2.5 人日
 5. `live2d_orchestrator`：多模型状态机 + 事件带 role + 口型按 role 路由。
-6. 资产与映射：迁移旧项目 `Haru` 至 `assets/live2d/Haru/`（约 0.5 天，含加载验证）；`config.yaml` 新增 `roles[]`（live2d_model/position/scale + `expression_map`/`motion_map`）。
-7. `live2d_stream/index.html`：双模型同台渲染 + 表情/动作映射应用 + 口型收尾过渡（200ms）。
-   - 验收点：双角色同屏、各自表情/动作/口型由带 role 的事件驱动（此时尚未发言，验证渲染与路由；同时修复现有单模型表情失效缺陷）。
+6. 资产与映射：迁移旧项目 `Hiyori` 至 `assets/live2d/Hiyori/`（约 0.5 天，含加载验证）；Lilith 沿用现有"小恶魔"；`config.yaml` 新增 `roles[]`（live2d_model/position/scale + `expression_map`/`motion_map` + `restrict_breath`/`idle_silent_motion`）。
+7. `live2d_stream/index.html`：双模型同台渲染 + 表情/动作映射应用 + 呼吸限制状态机（SILENT/TALKING + 口型收尾 200ms）。
+   - 验收点：双角色同屏、各自表情/动作/口型由带 role 的事件驱动（此时尚未发言，验证渲染与路由；同时修复现有单模型表情失效缺陷）；Yuki（Hiyori）静默时呼吸动作被压制为低动作 idle。
 
 ### P2 · 联动核心（完整双人对话）— 约 3.5-4.5 人日
 8. `collaboration/` 六文件：rules → arbitrator → turn_tracker → context_manager → triggers → coordinator（TDD，每规则独立单测，含队列优先级单测）。
@@ -435,11 +446,12 @@ collaboration:
 
 | # | 评审点 | 决策 | 落点 |
 |---|---|---|---|
-| 1 | Lilith 模型来源 | **迁移旧项目 Haru**（已核验 Cubism 3 同格式同运行时，约 0.5 天）；时间紧降级为共用小恶魔 + 换色区分；跨模型必须配 `expression_map`/`motion_map`（顺带修复现有表情失效缺陷） | §9.1、§11 P1 |
+| 1 | 模型来源（评审调整） | **Yuki 形象 = 迁移旧项目 Hiyori**（已核验 Cubism 3 同格式同运行时，无表情文件、9 个 Idle 动作）；**Lilith = 沿用现有小恶魔**（零迁移）；Haru 留作备选；时间紧降级共用单模型换色区分 | §9.1、§11 P1 |
+| 1b | Hiyori 呼吸动作限制（评审新增） | `restrict_breath: true` + `idle_silent_motion`（静默态只播低动作 idle，P1 实测选定）；前端驱动改显式状态机 SILENT/TALKING；未发言角色呼吸被压制；P3 可选参数层限制（YAGNI 兜底） | §9.1 |
 | 2 | 相关性关键词来源 | character.yaml v2.1 新增 `keywords`（personality/topics/patterns，支持子串/短语/`regex:` 前缀）；缺失时从 personality/catchphrase/speaking_style 兜底推导；catchphrases.json 仅作口癖不担相关性 | §8 规则 3 |
 | 3 | 接话概率/冷却初值 | `0.3`/`20.0` 为建议起步值；ConfigLoader 无热更新 → 协调器 `_runtime_config` + `POST /api/collab/config` 白名单项运行时调整，重启回落 | §8 配置 |
 | 4 | 单角色回归范围 | 分两层：每阶段基础层（265 测试 + 弹幕 demo + 37 项端到端脚本，0.5 人日）；P2 后一次完整层（助手全功能 +0.5 人日） | §12 项 5 |
 | 5 | 待发队列优先级 | 请求带 priority（Mention P0 > Intent P1 > Relevance P2 > Collab P3 > Active P4），插队 + 同级 FIFO；v1 不硬打断，P3 可选软抢占 | §8 互斥与排队 |
 | 6 | 口型切换平滑 | 自然过渡 + 显式收尾：新角色 `lip_sync_start` 前旧模型口型归零回 idle（200ms）；后端不硬重置 | §9.1 |
 
-总工作量由 6.5-9 人日调整为 **7.5-10 人日**（含 Haru 迁移与运行时调参 API）。
+总工作量由 6.5-9 人日调整为 **7.5-10 人日**（含 Hiyori 迁移、呼吸限制状态机与运行时调参 API）。

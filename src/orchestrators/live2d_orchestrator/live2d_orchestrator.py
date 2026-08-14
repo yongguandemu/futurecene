@@ -103,7 +103,7 @@ class Live2DOrchestrator:
 
     def _load(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         role = payload.get("role", DEFAULT_ROLE)
-        model_name = payload.get("model_name", DEFAULT_MODEL)
+        model_name = payload.get("model_name") or DEFAULT_MODEL  # None 防御：回退默认模型
         st = self._state(role)
         st["model"] = model_name
         self._event_bus.publish(LIVE2D_LOADED, model=model_name, role=role)

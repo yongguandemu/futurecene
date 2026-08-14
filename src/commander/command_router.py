@@ -83,19 +83,18 @@ class CommandRouter:
         """
         cid = command.command_id
         role = getattr(self._session, "role", "yuki") if self._session else "yuki"
+        model_name = "小恶魔" if role == "lilith" else "Hiyori"
         orch = self._registry.match("live2d:load")
         load_ok = False
         if orch is not None and self._switch_manager.is_enabled(orch.name):
             try:
                 res = await orch.handle({
                     "capability": "live2d:load",
-                    "payload": {"role": role,
-                                "model_name": command.payload.get("model_name") or None},
+                    "payload": {"role": role, "model_name": model_name},
                 })
                 load_ok = bool(res.get("ok"))
             except Exception as e:
                 logger.warning("[CommandRouter] live2d:prepare load 失败: %s", e)
-        model_name = "小恶魔" if role == "lilith" else "Hiyori"
         text = ("直播界面已就绪，模型 %s 已装载，可以开播啦～" % model_name) if load_ok \
                else "直播界面已就绪（模型由前端加载），可以开播啦～"
         self._event_bus.publish(FRONTEND_SUBTITLE_UPDATE, text=text, role=role,

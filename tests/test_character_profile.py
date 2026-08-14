@@ -45,13 +45,75 @@ def test_keywords_fallback_without_keywords_field():
             "character:\n"
             "  personality: [毒舌, 冷静]\n"
             "  catchphrase: 呵\n"
-            "  speaking_style: 犀利\n",
+            "  speaking_style: 犀利，毒\n",
             encoding="utf-8")
         (r / "system_prompt.txt").write_text("你是Lilith。", encoding="utf-8")
         loader = CharacterProfileLoader(profiles_dir=Path(d) / "profiles")
         kw = loader.keywords_for("lilith")
-        # 兜底推导：personality + catchphrase + speaking_style 分词
-        assert any("毒舌" in k for k in kw["topics"]) or "毒舌" in kw["personality"]
+        # 强断言：topics 桶含 catchphrase 剥离后的词（"呵"）与 speaking_style 分词（"犀利"）
+        assert "呵" in kw["topics"]
+        assert "犀利" in kw["topics"]
+        # len<2 的单字（speaking_style 分词噪声"毒"）被过滤
+        assert "毒" not in kw["topics"]
+        # personality 只进 personality 桶，不与 topics 重复计分（RelevanceRule 权重依赖）
+        assert "毒舌" in kw["personality"] and "毒舌" not in kw["topics"]
+        assert "冷静" in kw["personality"] and "冷静" not in kw["topics"]
+
+
+def test_load_caches_same_object_and_ignores_file_change():
+    with tempfile.TemporaryDirectory() as d:
+        _make_profiles(Path(d))
+        loader = CharacterProfileLoader(profiles_dir=Path(d) / "profiles")
+        p1 = loader.load("yuki")
+        p2 = loader.load("yuki")
+        assert p1 is p2  # 二次 load 命中缓存：同一对象，不重读
+        (Path(d) / "profiles" / "yuki" / "character.yaml").write_text(
+            "display_name: Changed\n"
+            "character:\n"
+            "  personality: [高冷]\n",
+            encoding="utf-8")
+        p3 = loader.load("yuki")
+        assert p3 is p1
+        assert p3.display_name == "Yuki"  # 文件改动后仍为缓存值，未重读
+
+
+def test_load_malformed_yaml_degrades_gracefully():
+    with tempfile.TemporaryDirectory() as d:
+        r = Path(d) / "profiles" / "nino"
+        r.mkdir(parents=True)
+        (r / "character.yaml").write_text("display_name: [unclosed\n",
+                                          encoding="utf-8")  # 语法错误
+        (r / "system_prompt.txt").write_text("你是Nino。", encoding="utf-8")
+        (r / "tts_config.yaml").write_text("tts:\n  wusound:\n    voice_id: v-nino\n",
+                                           encoding="utf-8")
+        loader = CharacterProfileLoader(profiles_dir=Path(d) / "profiles")
+        p = loader.load("nino")  # 畸形 YAML 不抛异常
+        assert p is not None
+        assert p.display_name == "nino"  # 降级回退角色名
+        assert p.system_prompt == "你是Nino。"  # 其余字段仍可加载
+        assert p.voice_id == "v-nino"
+        assert p.keywords == {}
+
+
+def test_fallback_minor_robustness():
+    with tempfile.TemporaryDirectory() as d:
+        r = Path(d) / "profiles" / "mio"
+        r.mkdir(parents=True)
+        (r / "character.yaml").write_text(
+            "display_name: \"\"\n"
+            "character:\n"
+            "  personality: 活泼\n"   # 缺 []：字符串标签
+            "  catchphrase: 耶~\n"
+            "  speaking_style: null\n",  # None：不产生幽灵关键词
+            encoding="utf-8")
+        (r / "system_prompt.txt").write_text("你是Mio。", encoding="utf-8")
+        loader = CharacterProfileLoader(profiles_dir=Path(d) / "profiles")
+        p = loader.load("mio")
+        assert p.display_name == "mio"  # 空串回退 role
+        assert p.keywords["personality"] == ["活泼"]  # 字符串包成 list，不拆成单字
+        assert "活泼" not in p.keywords["topics"]  # 双桶去重
+        assert "None" not in p.keywords["topics"]  # speaking_style=None 无幽灵词
+        assert "耶" in p.keywords["topics"]  # catchphrase 去语气词/标点后保留
 
 
 def test_load_missing_role_returns_none():

@@ -13,6 +13,14 @@ logger = logging.getLogger(__name__)
 
 PROFILES_DIR = Path(__file__).resolve().parents[2] / "config" / "profiles"
 
+# 兜底推导用：catchphrase 剥离的句尾语气词与标点（"呵/哼/耶"等口癖叹词保留）
+_PARTICLE_CHARS = "啊呀哦噢嗯呢吧嘛么呗哟啦"
+_STRIP_CHARS = "~～,，。！!?？…、 "
+
+
+def _strip_catchphrase(text: str) -> str:
+    return text.strip(_PARTICLE_CHARS + _STRIP_CHARS)
+
 
 @dataclass
 class CharacterProfile:
@@ -59,11 +67,12 @@ class CharacterProfileLoader:
         if char_yaml.exists():
             try:
                 data = yaml.safe_load(char_yaml.read_text(encoding="utf-8")) or {}
-                profile.display_name = data.get("display_name", role)
+                profile.display_name = data.get("display_name") or role
                 char = data.get("character", {}) or {}
                 profile.keywords = self._derive_keywords(data, char)
             except Exception as e:
                 logger.warning("[CharacterProfile] %s character.yaml 解析失败: %s", role, e)
+                profile.display_name = role  # 畸形 YAML 降级：至少回退角色名
         sp = role_dir / "system_prompt.txt"
         if sp.exists():
             profile.system_prompt = sp.read_text(encoding="utf-8").strip()
@@ -91,20 +100,30 @@ class CharacterProfileLoader:
 
     @staticmethod
     def _derive_keywords(data: dict, char: dict) -> Dict[str, List[str]]:
-        """优先用 character.yaml 的 keywords 字段；缺失则兜底推导。"""
+        """优先用 character.yaml 的 keywords 字段；缺失则兜底推导。
+
+        兜底规则（RelevanceRule 依赖三桶权重区分，同一标签不得双桶重复计分）：
+        - personality 标签只进 personality 桶；
+        - topics 桶只收 catchphrase（去语气词/标点后的内容词）与 speaking_style 分词；
+        - speaking_style 分词按 len>=2 过滤单字噪声；catchphrase 为刻意的口癖，单字保留；
+        - patterns 恒为空。
+        """
         kw = data.get("keywords") or {}
         if kw:
             return {"personality": list(kw.get("personality", []) or []),
                     "topics": list(kw.get("topics", []) or []),
                     "patterns": list(kw.get("patterns", []) or [])}
-        derived = []
-        for label in (char.get("personality", []) or []):
-            derived.append(str(label))
-        if char.get("catchphrase"):
-            derived.append(str(char["catchphrase"]).strip("~～,，。"))
-        for token in re.split(r"[，,。;；\s]+", str(char.get("speaking_style", ""))):
+        personality = char.get("personality", []) or []
+        if isinstance(personality, str):
+            personality = [personality]  # 缺 []：包成单元素 list，避免按字符拆散
+        personality_tags = [str(x) for x in personality]
+        topics = []
+        catchphrase = _strip_catchphrase(str(char.get("catchphrase") or ""))
+        if catchphrase:
+            topics.append(catchphrase)
+        for token in re.split(r"[，,。;；、\s]+",
+                              str(char.get("speaking_style") or "")):
             token = token.strip()
-            if token and len(token) >= 2:
-                derived.append(token)
-        return {"personality": [str(x) for x in (char.get("personality", []) or [])],
-                "topics": derived, "patterns": []}
+            if len(token) >= 2:  # 分词单字噪声被过滤
+                topics.append(token)
+        return {"personality": personality_tags, "topics": topics, "patterns": []}

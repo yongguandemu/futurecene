@@ -100,29 +100,51 @@ def test_health():
 
 
 def test_multi_model_events_carry_role():
-    import asyncio
-    from src.shared.event_bus import EventBus
-    from src.orchestrators.live2d_orchestrator.live2d_orchestrator import Live2DOrchestrator
-    bus = EventBus()
-    orch = Live2DOrchestrator(bus)
-    orch.start()
-    events = []
-    bus.subscribe("live2d:loaded", lambda **kw: events.append(kw))
+    """多角色状态隔离：yuki/lilith 各自独立模型状态且事件携带 role。"""
+    orch, bus = _make()
+    loaded = []
+    bus.subscribe(LIVE2D_LOADED, lambda event, **kw: loaded.append(kw))
     asyncio.run(orch.handle({"capability": "live2d:load",
                              "payload": {"model_name": "Hiyori", "role": "yuki"}}))
-    assert events[-1]["role"] == "yuki" and events[-1]["model"] == "Hiyori"
+    asyncio.run(orch.handle({"capability": "live2d:load",
+                             "payload": {"model_name": "小恶魔", "role": "lilith"}}))
+    # 两份独立状态且各自 model 正确
+    models = orch.snapshot()["models"]
+    assert set(models) == {"yuki", "lilith"}
+    assert models["yuki"]["model"] == "Hiyori"
+    assert models["lilith"]["model"] == "小恶魔"
+    assert [e["role"] for e in loaded] == ["yuki", "lilith"]
+    # 独立性：yuki 表情变更不影响 lilith 状态
+    asyncio.run(orch.handle({"capability": "live2d:expression",
+                             "payload": {"expression": "开心", "role": "yuki"}}))
+    snap = orch.snapshot()["models"]
+    assert snap["yuki"]["expression"] == "开心"
+    assert snap["lilith"]["expression"] == "平静"
 
 
 def test_audio_ready_routes_lip_sync_by_role():
-    import asyncio
-    from src.shared.event_bus import EventBus
-    from src.orchestrators.live2d_orchestrator.live2d_orchestrator import Live2DOrchestrator
-    bus = EventBus()
-    orch = Live2DOrchestrator(bus)
-    orch.start()
+    """tts:audio_ready 按 role 路由口型：仅目标角色收到 START/END，旧线程不误发 END。"""
+    orch, bus = _make()
     asyncio.run(orch.handle({"capability": "live2d:load",
                              "payload": {"model_name": "Hiyori", "role": "yuki"}}))
-    got = []
-    bus.subscribe("live2d:lip_sync_start", lambda **kw: got.append(kw))
-    bus.publish("tts:audio_ready", audio_id="a1", duration_ms=500, role="yuki")
-    assert got and got[0]["role"] == "yuki" and got[0]["audio_id"] == "a1"
+    asyncio.run(orch.handle({"capability": "live2d:load",
+                             "payload": {"model_name": "小恶魔", "role": "lilith"}}))
+    starts = []
+    ends = []
+    bus.subscribe(LIVE2D_LIP_SYNC_START, lambda event, **kw: starts.append(kw))
+    bus.subscribe(LIVE2D_LIP_SYNC_END, lambda event, **kw: ends.append(kw))
+
+    # 发布 role=lilith 的 tts:audio_ready → 仅 lilith 收到 START（yuki 无）
+    bus.publish(TTS_AUDIO_READY, audio_id="a1", duration_ms=200, role="lilith")
+    assert starts == [{"audio_id": "a1", "duration_ms": 200, "role": "lilith"}]
+    assert all(e["role"] == "lilith" for e in starts)  # yuki 未收到 START
+
+    # 同 role 快速连续口型：a2 覆盖 a1 → 旧线程（a1）不误发 END
+    bus.publish(TTS_AUDIO_READY, audio_id="a2", duration_ms=100, role="lilith")
+    assert [e["audio_id"] for e in starts] == ["a1", "a2"]
+
+    import time
+    time.sleep(0.5)  # 等 a2(100ms) 结束；a1(200ms) 旧线程醒来时已被 a2 覆盖
+    assert [e["audio_id"] for e in ends] == ["a2"]
+    assert all(e["role"] == "lilith" for e in ends)  # END 携带正确 role
+    orch.stop()

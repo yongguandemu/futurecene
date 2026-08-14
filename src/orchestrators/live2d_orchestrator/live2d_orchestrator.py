@@ -9,7 +9,7 @@
 
 # 模块内容清单（8 项契约）
 1. 模块身份标识：live2d 调度官 · live2d_orchestrator · 能力 live2d:load/expression/motion/lip_sync
-2. 配置契约：无（DEFAULT_MODEL="小恶魔"、VALID_EXPRESSIONS/VALID_MOTIONS 为常量）
+2. 配置契约：无（DEFAULT_MODEL="小恶魔"、DEFAULT_ROLE="yuki"、VALID_EXPRESSIONS/VALID_MOTIONS 为常量）
 3. 输入契约：handle(command) — capability + payload（model_name/expression/motion/audio_id/duration_ms/role）；订阅 tts:audio_ready 事件（payload 含 role）
 4. 输出契约：返回 {"ok","data","error"}；发布 LIVE2D_LOADED/EXPRESSION_CHANGED/MOTION_TRIGGERED/LIP_SYNC_START/LIP_SYNC_END（均带 role） + FRONTEND_STATUS_UPDATE
 5. 依赖声明：logging/threading/time/typing；registry；src.shared.events
@@ -36,6 +36,7 @@ from src.shared.events import (
 logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "小恶魔"
+DEFAULT_ROLE = "yuki"
 VALID_EXPRESSIONS = {"开心", "难过", "惊讶", "害羞", "生气", "平静"}
 VALID_MOTIONS = {"wave", "nod", "shake", "idle"}
 
@@ -94,14 +95,14 @@ class Live2DOrchestrator:
     # ---------- 内部实现 ----------
 
     def _state(self, role: str) -> Dict[str, Any]:
-        """取/建角色模型状态（默认 role="yuki"，向后兼容）。"""
+        """取/建角色模型状态（默认 role=DEFAULT_ROLE，向后兼容）。"""
         if role not in self._models:
             self._models[role] = {"model": None, "expression": "平静",
                                   "motion": "idle", "lip_sync": {}}
         return self._models[role]
 
     def _load(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        role = payload.get("role", "yuki")
+        role = payload.get("role", DEFAULT_ROLE)
         model_name = payload.get("model_name", DEFAULT_MODEL)
         st = self._state(role)
         st["model"] = model_name
@@ -111,7 +112,7 @@ class Live2DOrchestrator:
                 "error": None}
 
     def _expression_change(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        role = payload.get("role", "yuki")
+        role = payload.get("role", DEFAULT_ROLE)
         st = self._state(role)
         if st["model"] is None:
             return {"ok": False, "data": {}, "error": "模型未加载，请先 live2d:load"}
@@ -124,7 +125,7 @@ class Live2DOrchestrator:
         return {"ok": True, "data": {"applied": True}, "error": None}
 
     def _motion_trigger(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        role = payload.get("role", "yuki")
+        role = payload.get("role", DEFAULT_ROLE)
         st = self._state(role)
         if st["model"] is None:
             return {"ok": False, "data": {}, "error": "模型未加载，请先 live2d:load"}
@@ -137,7 +138,7 @@ class Live2DOrchestrator:
         return {"ok": True, "data": {"triggered": True}, "error": None}
 
     def _lip_sync(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return self._start_lip_sync(payload.get("role", "yuki"),
+        return self._start_lip_sync(payload.get("role", DEFAULT_ROLE),
                                     payload.get("audio_id", ""),
                                     int(payload.get("duration_ms", 1500)))
 
@@ -165,8 +166,9 @@ class Live2DOrchestrator:
         return {"ok": True, "data": {"started": True}, "error": None}
 
     def _on_audio_ready(self, event: str, audio_id: str, duration_ms: int = 1500,
-                        role: str = "yuki", **kwargs) -> None:
-        """表达领域协作：tts:audio_ready（已带 role）→ 按 role 路由口型（规格书 3.4）。"""
+                        role: str = DEFAULT_ROLE, **kwargs) -> None:
+        """表达领域协作：role 由 tts:audio_ready 事件携带 → 按 role 路由口型
+        （事件缺失 role 时默认 DEFAULT_ROLE，规格书 3.4）。"""
         self._start_lip_sync(role, audio_id, duration_ms)
 
     def _push_status(self) -> None:

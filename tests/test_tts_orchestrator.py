@@ -50,6 +50,7 @@ def test_synthesize_returns_audio_id_and_publishes(tmp_path):
     assert r["data"]["audio_id"].endswith(".wav")
     assert r["data"]["duration_ms"] > 0
     assert seen["audio_id"] == r["data"]["audio_id"]
+    assert seen["role"] == "yuki"  # tts:audio_ready 透传 role（多角色口型路由依赖）
     import os
     assert os.path.exists(os.path.join(str(tmp_path / "tts_cache"), r["data"]["audio_id"]))
 
@@ -75,13 +76,15 @@ def test_synthesize_failure_publishes_failed(tmp_path):
 
 def test_stream_synthesize_splits_and_publishes(tmp_path):
     orch, bus = _make(tmp_path, client=FakeTTSClient(audio=b"x" * 6000))
-    audio_ids = []
-    bus.subscribe(TTS_AUDIO_READY, lambda event, **kw: audio_ids.append(kw["audio_id"]))
+    ready = []
+    bus.subscribe(TTS_AUDIO_READY,
+                  lambda event, **kw: ready.append((kw["audio_id"], kw["role"])))
     r = asyncio.run(orch.handle({"capability": "tts:stream_synthesize",
                                  "payload": {"text": "这是一段较长的文本用于流式分片合成", "role": "yuki"}}))
     assert r["ok"] is True
     assert r["data"]["segments"] >= 1
-    assert len(audio_ids) == r["data"]["segments"]
+    assert len(ready) == r["data"]["segments"]
+    assert all(role == "yuki" for _, role in ready)  # 每片均透传 role
 
 
 def test_cache_clean(tmp_path):

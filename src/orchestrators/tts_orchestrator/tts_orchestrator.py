@@ -10,7 +10,7 @@
 1. 模块身份标识：tts · TTSOrchestrator · 能力 tts:synthesize/stream_synthesize/stop/cache_clean
 2. 配置契约：ConfigLoader tts 域（wusound.api_key/voice_id/preset/language/flash/vivid/break_clone/timeout、dashscope.api_key/model/voice_id），回退 os.environ
 3. 输入契约：handle(command) 指令字典（capability + payload：text/role/voice/chunk_size/max_age_hours）
-4. 输出契约：{ok, data:{audio_id, duration_ms, engine}, error}；发布 tts:requested / tts:audio_ready / tts:failed 事件
+4. 输出契约：{ok, data:{audio_id, duration_ms, engine}, error}；发布 tts:requested / tts:audio_ready（携带 role，供 Live2D 按角色口型路由）/ tts:failed 事件
 5. 依赖声明：logging、os、time、pathlib、typing、registry、DashScopeTTSClient、WusoundClient、src.shared.config_loader、src.shared.events
 6. 错误定义：主引擎失败降级备引擎；全部失败发布 tts:failed 并返回 error；text 缺失返回 error
 7. 生命周期方法：start()/stop()/health()
@@ -139,7 +139,8 @@ class TTSOrchestrator:
                 if engine != "wusound":
                     logger.warning("[TTSOrchestrator] 降级: wusound 失败 → %s", engine)
                 self._event_bus.publish(TTS_AUDIO_READY, audio_id=audio_id,
-                                        duration_ms=duration_ms, path=str(audio_path))
+                                        duration_ms=duration_ms, path=str(audio_path),
+                                        role=role)
                 return {"ok": True,
                         "data": {"audio_id": audio_id, "duration_ms": duration_ms,
                                  "engine": engine},
@@ -212,7 +213,7 @@ class TTSOrchestrator:
             audio_ids.append(audio_id)
             self._event_bus.publish(TTS_AUDIO_READY, audio_id=audio_id,
                                     duration_ms=duration_ms, path=str(audio_path),
-                                    segment=len(audio_ids) - 1)
+                                    role=role, segment=len(audio_ids) - 1)
         return {"ok": bool(audio_ids), "data": {"segments": len(audio_ids)},
                 "error": None if audio_ids else "流式合成失败"}
 

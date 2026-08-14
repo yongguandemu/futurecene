@@ -35,7 +35,7 @@ def test_load_model():
     bus.subscribe(LIVE2D_LOADED, lambda event, **kw: seen.update(kw))
     r = asyncio.run(orch.handle({"capability": "live2d:load",
                                  "payload": {"model_name": "小恶魔"}}))
-    assert r["ok"] is True and r["data"] == {"loaded": True, "model": "小恶魔"}
+    assert r["ok"] is True and r["data"] == {"loaded": True, "model": "小恶魔", "role": "yuki"}
     assert seen["model"] == "小恶魔"
     assert orch.snapshot()["model"] == "小恶魔"
 
@@ -97,3 +97,32 @@ def test_unknown_capability():
 def test_health():
     orch, _ = _make()
     assert orch.health()["status"] == "ok"
+
+
+def test_multi_model_events_carry_role():
+    import asyncio
+    from src.shared.event_bus import EventBus
+    from src.orchestrators.live2d_orchestrator.live2d_orchestrator import Live2DOrchestrator
+    bus = EventBus()
+    orch = Live2DOrchestrator(bus)
+    orch.start()
+    events = []
+    bus.subscribe("live2d:loaded", lambda **kw: events.append(kw))
+    asyncio.run(orch.handle({"capability": "live2d:load",
+                             "payload": {"model_name": "Hiyori", "role": "yuki"}}))
+    assert events[-1]["role"] == "yuki" and events[-1]["model"] == "Hiyori"
+
+
+def test_audio_ready_routes_lip_sync_by_role():
+    import asyncio
+    from src.shared.event_bus import EventBus
+    from src.orchestrators.live2d_orchestrator.live2d_orchestrator import Live2DOrchestrator
+    bus = EventBus()
+    orch = Live2DOrchestrator(bus)
+    orch.start()
+    asyncio.run(orch.handle({"capability": "live2d:load",
+                             "payload": {"model_name": "Hiyori", "role": "yuki"}}))
+    got = []
+    bus.subscribe("live2d:lip_sync_start", lambda **kw: got.append(kw))
+    bus.publish("tts:audio_ready", audio_id="a1", duration_ms=500, role="yuki")
+    assert got and got[0]["role"] == "yuki" and got[0]["audio_id"] == "a1"

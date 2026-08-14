@@ -64,7 +64,7 @@
   ];
   var hint = document.getElementById("hint");
   var app = null;
-  var actors = {};   // role -> { model, motion, state: 'silent'|'talking' }
+  var actors = {};   // role -> { model, motion, state: 'silent'|'talking', timer, lastAudio }
 
   function showHint(text) { hint.textContent = text; hint.style.display = "block"; }
 
@@ -108,6 +108,40 @@
     } catch (e) { /* ignore */ }
   }
 
+  function clearLipTimer(role) {
+    var a = actors[role];
+    if (a && a.timer) { clearTimeout(a.timer); a.timer = null; }
+  }
+
+  function endLipSync(role) {
+    stopLipSync(role);
+    setState(role, "silent");
+  }
+
+  // ---- 口型统一入口（per-role 收尾 timer + 按 audio_id 去重） ----
+  // tts:audio_ready / live2d:lip_sync_start / audio:segment_ready 与 speech:completed
+  // 兜底均经此处理：同一音频段仅启动一次口型；新段到达先取消旧 timer，避免截断。
+  function handleLipSync(role, audioId, dur) {
+    var a = actors[role];
+    if (!a || !a.model || !audioId) return;
+    if (a.lastAudio === audioId) return;          // 去重：双路/兜底同段只处理一次
+    clearLipTimer(role);                          // 取消本角色旧段收尾 timer
+    a.lastAudio = audioId;
+    // 其他角色收尾：口型归零 + 回 idle + 取消其待触发 timer
+    Object.keys(actors).forEach(function (r) {
+      if (r !== role) { clearLipTimer(r); stopLipSync(r); setState(r, "silent"); }
+    });
+    setState(role, "talking");
+    try {
+      a.model.internalModel.motionManager.update(0, 0);
+    } catch (e) { /* ignore */ }
+    var ms = dur || 1500;
+    a.timer = setTimeout(function () {
+      a.timer = null;
+      if (a.lastAudio === audioId) endLipSync(role);   // 仍是当前段才收尾
+    }, ms);
+  }
+
   // ---- store 事件处理（按 role 路由） ----
   function handleEvent(type, ev) {
     var role = ev.role || "yuki";
@@ -119,19 +153,10 @@
       var expr = mappedExpression(role, ev.expression);
       if (expr) { try { a.model.expression(expr); } catch (e) { /* ignore */ } }
     } else if (type === "live2d:lip_sync_start") {
-      // 口型切换：先收尾旧角色（200ms 过渡），再启动新角色口型
-      Object.keys(actors).forEach(function (r) {
-        if (r !== role) { stopLipSync(r); setState(r, "silent"); }
-      });
-      setState(role, "talking");
-      try {
-        var dur = ev.duration_ms || 1500;
-        a.model.internalModel.motionManager.update(0, 0);
-        setTimeout(function () {
-          stopLipSync(role);
-          setState(role, "silent");
-        }, dur);
-      } catch (e) { /* ignore */ }
+      handleLipSync(role, ev.audio_id, ev.duration_ms);
+    } else if (type === "live2d:lip_sync_end") {
+      // 权威结束事件（后端按时长触发，带 role/audio_id）：仅当前段结束时收尾
+      if (a.lastAudio === ev.audio_id) { clearLipTimer(role); endLipSync(role); }
     }
   }
 
@@ -141,22 +166,26 @@
     var sync = new window.FSStateSync(store);
     sync.init();
     store.subscribe("live2d:", function (state, event) { handleEvent(event.type, event); });
+    // tts:/audio: 合成路径同样走 handleLipSync（audio_id 去重，双路只处理一次）
     store.subscribe("tts:", function (state, event) {
-      if (event.type === "tts:audio_ready") handleEvent("live2d:lip_sync_start", {
-        role: event.role || "yuki", audio_id: event.audio_id,
-        duration_ms: event.duration_ms });
+      if (event.type === "tts:audio_ready") handleLipSync(event.role || "yuki",
+        event.audio_id, event.duration_ms);
     });
     store.subscribe("audio:", function (state, event) {
-      if (event.type === "audio:segment_ready") handleEvent("live2d:lip_sync_start", {
-        role: event.role || "yuki", audio_id: event.audio_id,
-        duration_ms: event.duration_ms || 1500 });
+      if (event.type === "audio:segment_ready") handleLipSync(event.role || "yuki",
+        event.audio_id, event.duration_ms || 1500);
     });
-    // 静默态兜底：各角色回 idle
+    // 静默态兜底：加 audio_id 守卫，仅当仍是当前口型段时才收尾（不截断新段）
     store.subscribe("speech:completed", function (state, event) {
       var role = event.role;
-      if (role && actors[role]) {
-        setTimeout(function () { stopLipSync(role); setState(role, "silent"); }, 220);
-      }
+      if (!role || !actors[role]) return;
+      if (actors[role].lastAudio !== event.audio_id) return;
+      setTimeout(function () {
+        if (actors[role].lastAudio === event.audio_id) {
+          clearLipTimer(role);
+          endLipSync(role);
+        }
+      }, 220);
     });
   }
 
@@ -182,7 +211,7 @@
         model.x = app.screen.width * (cfg.x !== undefined ? cfg.x : 0.5);
         model.y = app.screen.height;
         app.stage.addChild(model);
-        actors[cfg.name] = { model: model, state: "silent" };
+        actors[cfg.name] = { model: model, state: "silent", timer: null, lastAudio: null };
         setState(cfg.name, "silent");   // 呼吸限制：显式进入受控 idle
       } catch (e) {
         showHint("模型未就绪：" + url);

@@ -90,3 +90,104 @@ class RulesJudge:
                 return UrgencyResult({verdict.role: verdict.confidence}, False,
                                      verdict.reason, "rules")
         return UrgencyResult({}, True, "no-rule-hit", "rules")
+
+
+import json  # noqa: E402
+import re  # noqa: E402
+import threading  # noqa: E402
+import time  # noqa: E402
+
+from src.orchestrators.collaboration.rules import make_rules_by_order  # noqa: E402
+
+DEFAULT_RULES_ORDER = ["mention", "intent", "continuation", "relevance",
+                       "balance", "cooldown", "random"]
+_JUDGE_SYSTEM = (
+    "你是直播间双虚拟主播的发言权判断器。根据弹幕/情境判断 Yuki 与 Lilith "
+    "谁更应当说话（或都不说话）。只输出 JSON，不要其它文字："
+    '{"yuki": 0到1的紧迫度, "lilith": 0到1的紧迫度, "silent": true或false}'
+)
+_JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+
+class LLMJudge:
+    """轻量 LLM 判断：注入弹幕 + 最近话轮 + 角色画像 → 结构化紧迫度。
+
+    预算：budget_per_min 次/分钟（成功调用计数），超预算回退 RulesJudge。
+    失败：LLM 异常 / JSON 解析失败 → 回退 RulesJudge（source=rules-fallback）。
+    """
+
+    def __init__(self, llm, profiles, budget_per_min: int = 4,
+                 rules_order: List[str] = None,
+                 rng_seed: int = None):
+        self._llm = llm
+        self._profiles = profiles
+        self._budget = max(1, int(budget_per_min))
+        self._calls: List[float] = []
+        self._lock = threading.Lock()
+        self._fallback = RulesJudge(
+            make_rules_by_order(rules_order or DEFAULT_RULES_ORDER, seed=rng_seed))
+
+    def _budget_available(self) -> bool:
+        now = time.time()
+        with self._lock:
+            self._calls = [t for t in self._calls if now - t < 60.0]
+            return len(self._calls) < self._budget
+
+    def _fallback_result(self, note: str, ctx) -> UrgencyResult:
+        r = self._fallback.judge(ctx)
+        return UrgencyResult(r.urgencies, r.silent, f"fallback:{note}", "rules-fallback")
+
+    def _build_prompt(self, ctx: ArbitrationContext) -> str:
+        turns = []
+        history_fn = getattr(ctx.turn_tracker, "turn_history", None)
+        if callable(history_fn):
+            for t in (history_fn(limit=5) or []):
+                if t.get("role") and t.get("text"):
+                    turns.append(f"{t['role']}: {t['text'][:60]}")
+        personas = {}
+        for role in sorted(ctx.present_roles):
+            try:
+                p = self._profiles.load(role)
+                personas[role] = (getattr(p, "system_prompt", "") or "")[:120]
+            except Exception:
+                personas[role] = ""
+        return (
+            f"弹幕：{ctx.text}\n"
+            f"最近对话：\n" + ("\n".join(turns[-3:]) or "（无）") + "\n"
+            f"角色画像：\n" + "\n".join(f"{r}: {personas[r] or '（无）'}"
+                                        for r in sorted(ctx.present_roles)) + "\n"
+            f"在场：{sorted(ctx.present_roles)}"
+        )
+
+    def _parse(self, reply: str):
+        m = _JSON_RE.search(reply or "")
+        if not m:
+            raise ValueError("reply 无 JSON")
+        data = json.loads(m.group(0))
+        urgencies = {}
+        for role in (data or {}):
+            if role == "silent":
+                continue
+            try:
+                urgencies[role] = max(0.0, min(1.0, float(data[role])))
+            except (TypeError, ValueError):
+                continue
+        silent = bool((data or {}).get("silent", False))
+        return urgencies, silent
+
+    def judge(self, ctx: ArbitrationContext) -> UrgencyResult:
+        if not self._budget_available():
+            return self._fallback_result("budget", ctx)
+        try:
+            resp = self._llm._chat({
+                "text": self._build_prompt(ctx),
+                "system_prompt": _JUDGE_SYSTEM,
+                "history": [],
+            })
+            reply = ((resp or {}).get("data") or {}).get("reply", "") or ""
+            urgencies, silent = self._parse(reply)
+        except Exception as exc:
+            return self._fallback_result(f"llm-error:{type(exc).__name__}", ctx)
+        with self._lock:
+            self._calls.append(time.time())
+        return UrgencyResult(urgencies, silent, "llm", "llm")

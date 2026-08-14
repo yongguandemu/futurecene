@@ -56,6 +56,7 @@
           next.degradation = snap.degradation || next.degradation;
           next.cost = snap.cost || next.cost;
           next.watchdog = snap.watchdog || next.watchdog;
+          next.characters = snap.characters || next.characters;
           next.version = version !== undefined ? version : next.version;
         }
         return next;
@@ -104,6 +105,11 @@
       if (type === 'session:switched' && event.role && seq > next.snapshotSeq) {
         next.session = Object.assign({}, next.session, { role: event.role });
       }
+      // 多角色在场说话状态（快照之后的角色事件才应用；快照本身已含 speaking）
+      if (event.role && next.characters[event.role] && seq > next.snapshotSeq) {
+        if (type === 'speech:arbitrated') next.characters[event.role].speaking = true;
+        if (type === 'speech:completed') next.characters[event.role].speaking = false;
+      }
       return next;
     };
   }
@@ -115,7 +121,7 @@
       snapshotSeq: -1,   // lastSnapshotSeq
       version: 0,
       session: {}, switches: {}, orchestrators: [], degradation: {},
-      cost: {}, watchdog: {},
+      cost: {}, watchdog: {}, characters: {},
       events: [],
       commands: {}
     };

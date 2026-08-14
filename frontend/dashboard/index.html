@@ -459,7 +459,7 @@ html, body { height: 100%; overflow: hidden; }
           </div>
           <div class="chat-input-bar">
             <button class="mic-btn" id="micBtn" title="语音输入" style="display:none" onclick="toggleMic()">🎤</button>
-            <textarea id="chatInput" rows="1" placeholder="输入指令，如：查看系统状态…（Enter 发送，Esc 清空）"></textarea>
+            <textarea id="chatInput" rows="1" placeholder="输入指令，如：查看系统状态…（@Yuki/@Lilith 前缀定向；Enter 发送，Esc 清空）"></textarea>
             <button class="send-btn" id="chatSendBtn" onclick="sendCommand()">发送</button>
           </div>
         </div>
@@ -468,6 +468,10 @@ html, body { height: 100%; overflow: hidden; }
           <div class="side-card">
             <div class="sp-label">系统状态 <span class="sp-action" onclick="refreshState(true)">刷新</span></div>
             <div class="sp-body" id="sideSession"><div class="muted">—</div></div>
+          </div>
+          <div class="side-card">
+            <div class="sp-label">在场角色</div>
+            <div class="sp-body" id="sideCharacters"><div class="muted">—</div></div>
           </div>
           <div class="side-card">
             <div class="sp-label">成本统计 <span class="sp-action" onclick="refreshMetrics()">刷新</span></div>
@@ -1237,6 +1241,12 @@ html, body { height: 100%; overflow: hidden; }
     return m;
   }
   function addMessage(role, text, opts) { return appendMsg(role, text, opts || {}); }
+  // @角色 定向解析：@yuki/@lilith 前缀 → target_role（走后端仲裁 MentionRule，大小写不敏感）
+  function parseTarget(text) {
+    const m = /^\s*@(yuki|lilith)[\s:：]/i.exec(text);
+    if (m) return { role: m[1].toLowerCase(), rest: text.slice(m[0].length) };
+    return { role: '', rest: text };
+  }
   function sendCommand(text, existingMsg) {
     const input = $('chatInput');
     const raw = (text !== undefined && text !== null) ? String(text) : input.value.trim();
@@ -1275,7 +1285,13 @@ html, body { height: 100%; overflow: hidden; }
         content: x.role === 'user' ? String(x.text || '') : stripHtml(x.html || x.text || '')
       }));
 
-    API.post('/api/command', { text: raw, session_id: SESSION_ID, history: historyMsgs }).then(res => {
+    API.post('/api/command', (function () {
+      // @角色 定向：剥离前缀进 target_role，正文发剥离后的 rest（空则回退原文）
+      const target = parseTarget(raw);
+      const payload = { text: target.rest.trim() || raw, session_id: SESSION_ID, history: historyMsgs };
+      if (target.role) payload.target_role = target.role;
+      return payload;
+    })()).then(res => {
       clearTimeout(failTimer);
       STATE.sending = false;
       $('chatSendBtn').disabled = false;
@@ -1438,6 +1454,25 @@ html, body { height: 100%; overflow: hidden; }
   }
 
   // —— 状态面板（数据源：store 快照） ——
+  // 多角色在场展示：角色名映射（store.characters 键为后端角色 id）
+  const CHAR_ROLE_NAMES = { yuki: 'Yuki', lilith: 'Lilith', lumi: 'Lumi' };
+  function renderCharacters(s) {
+    s = s || store.getState();
+    const chars = s.characters || {};
+    const el = $('sideCharacters');
+    if (!el) return;
+    const keys = Object.keys(chars);
+    if (!keys.length) { el.innerHTML = '<div class="muted">无在场角色</div>'; return; }
+    el.innerHTML = keys.map(function (role) {
+      const c = chars[role] || {};
+      const speaking = !!c.speaking;
+      const name = CHAR_ROLE_NAMES[role] || role;
+      return '<div class="sp-session-row"' + (speaking ? ' style="background:var(--success-bg);border-radius:var(--radius-sm);padding-left:6px"' : '') + '>' +
+        '<span class="k">' + esc(name) + '</span>' +
+        '<span class="v"' + (speaking ? ' style="color:var(--accent);font-weight:700"' : '') + '>' +
+        (speaking ? '● 说话中' : '在场') + '</span></div>';
+    }).join('');
+  }
   function renderStatusPanel(s) {
     s = s || store.getState();
     const session = s.session || {};
@@ -1451,6 +1486,8 @@ html, body { height: 100%; overflow: hidden; }
         '<div class="sp-session-row"><span class="k">场景</span><span class="v">' + esc(session.scene || '—') + '</span></div>' +
         '<div class="sp-session-row"><span class="k">会话 ID</span><span class="v">' + esc(SESSION_ID) + '</span></div>';
     }
+    // 在场角色（characters 段：在场 + speaking 高亮）
+    renderCharacters(s);
     // 顶栏角色/场景
     renderTopbar(s);
     renderCostCards();
@@ -1721,6 +1758,8 @@ html, body { height: 100%; overflow: hidden; }
   store.subscribe('*', function (state, event) {
     if (event.type === 'state:changed') { renderAll(state); renderStatusPanel(state); renderTopbar(state); return; }
     if (event.type === 'switch:changed') { renderAll(state); return; }
+    // 多角色说话状态：speech 事件即时刷新在场面板（不等下一次 state:changed）
+    if (event.type === 'speech:arbitrated' || event.type === 'speech:completed') renderCharacters(state);
     if (event.command_id) updateCommandStatus(event);
     appendEventLog(event);
     handleEvent(event);

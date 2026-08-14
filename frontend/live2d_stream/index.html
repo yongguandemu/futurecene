@@ -51,103 +51,149 @@
 (function () {
   "use strict";
 
-  var MODEL_URL = "/assets/live2d/小恶魔/小恶魔.model3.json"; // 由 app_factory /assets/ 静态路由服务
+  // 角色 → 模型配置（与 config.yaml roles 对应；无后端时前端兜底）
+  var ROLES = window.__ROLES || [
+    { name: "yuki", model: "Hiyori", restrictBreath: true, idleSilent: "Hiyori_m03",
+      x: 0.27, scale: 0.42,
+      expressionMap: {}, motionMap: { wave: "Hiyori_m01", nod: "Hiyori_m02",
+        shake: "Hiyori_m05", idle: "Hiyori_m01" } },
+    { name: "lilith", model: "小恶魔", restrictBreath: false, idleSilent: "idle",
+      x: 0.73, scale: 0.42,
+      expressionMap: { 开心: "唱歌", 难过: "流泪", 惊讶: "头发", 害羞: "嘟嘴", 生气: "脸黑", 平静: "头发" },
+      motionMap: { wave: "wave", nod: "nod", shake: "shake", idle: "idle" } }
+  ];
   var hint = document.getElementById("hint");
+  var app = null;
+  var actors = {};   // role -> { model, motion, state: 'silent'|'talking' }
 
-  function showHint(text) {
-    hint.textContent = text;
-    hint.style.display = "block";
+  function showHint(text) { hint.textContent = text; hint.style.display = "block"; }
+
+  function mappedMotion(role, semantic) {
+    var cfg = ROLES.find(function (r) { return r.name === role; });
+    if (!cfg || !cfg.motionMap) return null;
+    return cfg.motionMap[semantic] || cfg.motionMap.idle || null;
   }
 
-  // Live2D 口型同步：监听 tts:audio_ready（表达领域协作，规格书 3.4，保留现有功能）
-  var mouthOpen = 0;
+  function mappedExpression(role, semantic) {
+    var cfg = ROLES.find(function (r) { return r.name === role; });
+    if (!cfg || !cfg.expressionMap) return null;
+    return cfg.expressionMap[semantic] || null;   // 映射缺失 → null（跳过）
+  }
 
-  function setMouth(open) {
-    mouthOpen = open ? 0.9 : 0;
-    if (window.__app && window.__app.model) {
+  function playMotion(role, motion) {
+    var a = actors[role];
+    if (!a || !a.model || !motion) return;
+    try { a.model.motion(motion); } catch (e) { /* ignore */ }
+  }
+
+  function setState(role, state) {
+    var a = actors[role];
+    if (!a) return;
+    if (a.state === state) return;
+    a.state = state;
+    var cfg = ROLES.find(function (r) { return r.name === role; });
+    if (state === "silent") {
+      var idle = cfg && cfg.restrictBreath
+        ? (cfg.idleSilent || (cfg.motionMap && cfg.motionMap.idle))
+        : (cfg && cfg.motionMap ? cfg.motionMap.idle : null);
+      playMotion(role, idle);           // 呼吸压制：只播低动作 idle
+    }
+  }
+
+  function stopLipSync(role) {
+    var a = actors[role];
+    if (!a || !a.model) return;
+    try {
+      a.model.internalModel.motionManager.update(0, 0);
+    } catch (e) { /* ignore */ }
+  }
+
+  // ---- store 事件处理（按 role 路由） ----
+  function handleEvent(type, ev) {
+    var role = ev.role || "yuki";
+    var a = actors[role];
+    if (!a || !a.model) return;
+    if (type === "live2d:motion_triggered") {
+      playMotion(role, mappedMotion(role, ev.motion));
+    } else if (type === "live2d:expression_changed") {
+      var expr = mappedExpression(role, ev.expression);
+      if (expr) { try { a.model.expression(expr); } catch (e) { /* ignore */ } }
+    } else if (type === "live2d:lip_sync_start") {
+      // 口型切换：先收尾旧角色（200ms 过渡），再启动新角色口型
+      Object.keys(actors).forEach(function (r) {
+        if (r !== role) stopLipSync(r);
+      });
+      setState(role, "talking");
       try {
-        window.__app.model.internalModel.motionManager
-          .update(0, 0);
+        var dur = ev.duration_ms || 1500;
+        a.model.internalModel.motionManager.update(0, 0);
+        setTimeout(function () {
+          stopLipSync(role);
+          setState(role, "silent");
+        }, dur);
       } catch (e) { /* ignore */ }
     }
   }
 
-  // ---- store 事件处理（数据源统一，只订阅 live2d:/audio:/tts:） ----
-  // live2d:motion_triggered → 触发动作（motion 为动作名）
-  function triggerMotion(name) {
-    if (!window.__app || !window.__app.model || !name) return;
-    try { window.__app.model.motion(name); } catch (e) { /* ignore */ }
-  }
-  // live2d:expression_changed → 切换表情（expression 为表情 id/名）
-  function setExpression(name) {
-    if (!window.__app || !window.__app.model || !name) return;
-    try { window.__app.model.expression(name); } catch (e) { /* ignore */ }
-  }
-  // audio:segment_ready → 音频分片就绪：触发一段口型动画（音频播放由 /ws/tts_audio 通道提供）
-  function playSegment(audioId) {
-    if (window.__app && window.__app.model) {
-      setMouth(true);
-      setTimeout(function () { setMouth(false); }, 1500);
-    }
-  }
-
-  async function boot() {
-    if (!window.PIXI || !window.PIXI.live2d) {
-      showHint("PixiJS / Live2D 库加载失败，请检查网络（OBS 需可访问 CDN）");
-      return;
-    }
-    var app = new PIXI.Application({
-      view: document.createElement("canvas"),
-      transparent: true,
-      autoStart: true,
-      width: 560,
-      height: 720,
-      antialias: true,
-    });
-    var holder = document.getElementById("canvas-holder");
-    holder.appendChild(app.view);
-    window.__app = app;
-
-    try {
-      var model = await PIXI.live2d.Live2DModel.from(MODEL_URL);
-      model.anchor.set(0.5, 1.0);
-      model.scale.set(0.42);
-      model.x = app.screen.width / 2;
-      model.y = app.screen.height;
-      app.stage.addChild(model);
-      window.__app.model = model;
-      showHint("");
-      hint.style.display = "none";
-    } catch (e) {
-      showHint("模型未就绪：" + MODEL_URL + "（模型文件迁移后自动加载）");
-      // 模型缺失时保持透明画布，不阻塞 OBS 使用
-    }
-
-    // 单一 store + WS 同步：口型/表情/动作由后端事件驱动（断线自动重连补数）
-    var store = FSStore.createStore(FSStore.makeReducer(), FSStore.initialState());
-    var sync = new FSStateSync(store);
+  function wireStore() {
+    if (!window.FSStore || !window.FSStateSync) return;
+    var store = window.FSStore.createStore(window.FSStore.makeReducer(), window.FSStore.initialState());
+    var sync = new window.FSStateSync(store);
     sync.init();
-
-    store.subscribe("live2d:", function (state, event) {
-      if (event.type === "live2d:motion_triggered") triggerMotion(event.motion);
-      if (event.type === "live2d:expression_changed") setExpression(event.expression);
+    store.subscribe("live2d:", function (state, event) { handleEvent(event.type, event); });
+    store.subscribe("tts:", function (state, event) {
+      if (event.type === "tts:audio_ready") handleEvent("live2d:lip_sync_start", {
+        role: event.role || "yuki", audio_id: event.audio_id,
+        duration_ms: event.duration_ms });
     });
     store.subscribe("audio:", function (state, event) {
-      if (event.type === "audio:segment_ready") playSegment(event.audio_id);
+      if (event.type === "audio:segment_ready") handleEvent("live2d:lip_sync_start", {
+        role: event.role || "yuki", audio_id: event.audio_id,
+        duration_ms: event.duration_ms || 1500 });
     });
-    store.subscribe("tts:", function (state, event) {
-      if (event.type === "tts:audio_ready") {
-        setMouth(true);
-        setTimeout(function () { setMouth(false); }, event.duration_ms || 1500);
+    // 静默态兜底：各角色回 idle
+    store.subscribe("speech:completed", function (state, event) {
+      var role = event.role;
+      if (role && actors[role]) {
+        setTimeout(function () { stopLipSync(role); setState(role, "silent"); }, 220);
       }
     });
   }
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", boot);
-  } else {
-    boot();
+  async function boot() {
+    if (!window.PIXI || !window.PIXI.live2d) {
+      showHint("PixiJS / Live2D 库加载失败");
+      return;
+    }
+    app = new PIXI.Application({
+      view: document.createElement("canvas"), transparent: true, autoStart: true,
+      width: 1120, height: 720, antialias: true
+    });
+    document.getElementById("canvas-holder").appendChild(app.view);
+    window.__app = app;
+
+    for (var i = 0; i < ROLES.length; i++) {
+      var cfg = ROLES[i];
+      var url = "/assets/live2d/" + cfg.model + "/" + cfg.model + ".model3.json";
+      try {
+        var model = await PIXI.live2d.Live2DModel.from(url);
+        model.anchor.set(0.5, 1.0);
+        model.scale.set(cfg.scale || 0.42);
+        model.x = app.screen.width * (cfg.x !== undefined ? cfg.x : 0.5);
+        model.y = app.screen.height;
+        app.stage.addChild(model);
+        actors[cfg.name] = { model: model, state: "silent" };
+        setState(cfg.name, "silent");   // 呼吸限制：显式进入受控 idle
+      } catch (e) {
+        showHint("模型未就绪：" + url);
+      }
+    }
+    showHint("");
+    hint.style.display = "none";
   }
+
+  wireStore();
+  boot();
 })();
 </script>
 </body>

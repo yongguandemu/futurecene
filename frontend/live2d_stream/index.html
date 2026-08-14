@@ -121,7 +121,7 @@
     } else if (type === "live2d:lip_sync_start") {
       // 口型切换：先收尾旧角色（200ms 过渡），再启动新角色口型
       Object.keys(actors).forEach(function (r) {
-        if (r !== role) stopLipSync(r);
+        if (r !== role) { stopLipSync(r); setState(r, "silent"); }
       });
       setState(role, "talking");
       try {

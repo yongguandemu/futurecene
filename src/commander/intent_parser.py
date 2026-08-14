@@ -23,6 +23,12 @@ _SWITCH_ROLE_RE = re.compile(r"^!切换\s*(yuki|lilith)$", re.IGNORECASE)
 _SWITCH_ROLE_NL_RE = re.compile(r"^切换(?:角色)?\s*(?:为|到|成)?\s*(yuki|lilith)$", re.IGNORECASE)
 _POINT_SONG_RE = re.compile(r"^!点歌\s+(.+)$")
 _STATUS_RE = re.compile(r"^!(状态|status)$", re.IGNORECASE)
+# 直播准备意图（直播间集成 · 智能助手联动）
+_LIVE2D_LOAD_RE = re.compile(r"^(?:加载|切换)?(?:模型)?\s*(hiyori|小恶魔|yuki|lilith)\s*(?:模型)?$",
+                             re.IGNORECASE)
+_LIVE2D_EXPRESSION_RE = re.compile(r"^做(?:个)?(开心|难过|惊讶|害羞|生气|平静)(?:的表情)?$")
+_LIVE2D_MOTION_RE = re.compile(r"^(挥挥手|挥手|点头|摇头|打招呼)$")
+_LIVE2D_PREPARE_RE = re.compile(r"^准备(?:一下)?(?:直播|开播)(?:界面)?$")
 
 
 @dataclass
@@ -71,6 +77,34 @@ class IntentParser:
         m = _STATUS_RE.match(raw)
         if m:
             return Command(capability="system:status", payload={},
+                           source=source, session_id=session_id, raw=raw)
+
+        # 直播准备意图（直播间集成 · 智能助手联动）
+        m = _LIVE2D_LOAD_RE.match(raw)
+        if m:
+            name = m.group(1).lower()
+            return Command(capability="live2d:load",
+                           payload={"model_name": "小恶魔" if name in ("小恶魔", "lilith")
+                                    else "Hiyori"},
+                           source=source, session_id=session_id, raw=raw)
+
+        m = _LIVE2D_EXPRESSION_RE.match(raw)
+        if m:
+            return Command(capability="live2d:expression",
+                           payload={"expression": m.group(1)},
+                           source=source, session_id=session_id, raw=raw)
+
+        m = _LIVE2D_MOTION_RE.match(raw)
+        if m:
+            mapping = {"挥挥手": "wave", "挥手": "wave", "点头": "nod",
+                       "摇头": "shake", "打招呼": "wave"}
+            return Command(capability="live2d:motion",
+                           payload={"motion": mapping[m.group(1)]},
+                           source=source, session_id=session_id, raw=raw)
+
+        m = _LIVE2D_PREPARE_RE.match(raw)
+        if m:
+            return Command(capability="live2d:prepare", payload={},
                            source=source, session_id=session_id, raw=raw)
 
         # 系统命令（! 前缀未匹配到已知规则）→ 指挥官内部处理

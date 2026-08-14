@@ -50,3 +50,32 @@ def test_command_fields():
     cmd = _parse("你好", source="voice")
     assert cmd.session_id == "default"
     assert cmd.raw == "你好"
+
+
+def test_live2d_load_intent():
+    cmd = _parse("加载小恶魔模型")
+    assert cmd.capability == "live2d:load"
+    assert cmd.payload.get("model_name") == "小恶魔"
+
+
+def test_live2d_load_yuki_intent():
+    cmd = _parse("加载 Hiyori 模型")
+    assert cmd.capability == "live2d:load"
+    assert cmd.payload.get("model_name") == "Hiyori"
+
+
+def test_live2d_expression_intent():
+    cmd = _parse("做个开心的表情")
+    assert cmd.capability == "live2d:expression"
+    assert cmd.payload.get("expression") == "开心"
+
+
+def test_live2d_motion_intent():
+    cmd = _parse("挥挥手")
+    assert cmd.capability == "live2d:motion"
+    assert cmd.payload.get("motion") == "wave"
+
+
+def test_live2d_prepare_intent():
+    cmd = _parse("准备直播界面")
+    assert cmd.capability == "live2d:prepare"

@@ -459,11 +459,501 @@ collaboration:
 4. 互斥/冷却/排队护栏在两种 judge 下均生效（复用既有测试）。
 5. 成本可观测：`collab:judge` 事件记录每次 judge 来源（rules/llm）与耗时。
 
-## 实施顺序（V3 待 V2 数据后启动）
+## 实施顺序（V3 启动）
 
-- Task 6: judge.py 协议 + RulesJudge（TDD，默认零行为变化）
-- Task 7: LLMJudge + 预算/回退（TDD，mock LLM）
-- Task 8: arbitrator 接入 judge + 配置 + 事件 + 回归
+### Task 6: judge.py 协议 + RulesJudge（默认零行为变化）
+
+**Files:**
+- Create: `src/orchestrators/collaboration/judge.py`
+- Create: `tests/test_collab_judge.py`
+
+- [ ] **Step 1: 写失败测试**
+
+```python
+"""judge 单测（V3：紧迫度协议 + RulesJudge）。"""
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from src.orchestrators.collaboration.judge import RulesJudge, UrgencyResult
+from src.orchestrators.collaboration.rules import (
+    ArbitrationContext, make_rules_by_order,
+)
+
+
+class FakeProfiles:
+    def keywords_for(self, role):
+        return {"yuki": {"topics": ["故事", "月亮"], "patterns": ["讲个故事"]},
+                "lilith": {"topics": ["吐槽", "直播"], "patterns": []}}[role]
+
+
+class FakeTT:
+    def __init__(self, last=None):
+        self.last = last or {"yuki": 100.0, "lilith": 50.0}
+
+    def idle_seconds(self, role):
+        return self.last.get(role, 0.0)
+
+    def turn_history(self, limit=10):
+        return []
+
+
+def _ctx(text):
+    return ArbitrationContext(text=text, user_name="观众", source="danmaku",
+                              kind="danmaku", lead_role="yuki",
+                              present_roles={"yuki", "lilith"},
+                              profiles=FakeProfiles(), turn_tracker=FakeTT())
+
+
+def test_rules_judge_returns_winner_urgency():
+    rules = make_rules_by_order(["mention", "relevance", "random"], seed=1)
+    r = RulesJudge(rules).judge(_ctx("@Lilith 你怎么看"))
+    assert r.urgencies == {"lilith": 1.0}
+    assert r.silent is False
+    assert r.source == "rules"
+
+
+def test_rules_judge_matches_chain_semantics():
+    # 无 @、无关键词 → 落到链尾 random（与仲裁器既有行为一致，非 silent）
+    rules = make_rules_by_order(["mention", "relevance", "random"], seed=1)
+    r = RulesJudge(rules).judge(_ctx("随便聊聊"))
+    assert r.silent is False
+    assert len(r.urgencies) == 1                      # 仅胜者角色有紧迫度
+    assert set(r.urgencies) <= {"yuki", "lilith"}
+    assert list(r.urgencies.values())[0] == 0.5       # random 规则 confidence
+
+
+def test_rules_judge_silent_on_empty_present():
+    rules = make_rules_by_order(["mention", "random"], seed=1)
+    ctx = _ctx("随便聊聊")
+    ctx.present_roles = set()
+    r = RulesJudge(rules).judge(ctx)
+    assert r.silent is True and r.urgencies == {}
+```
+
+- [ ] **Step 2: 运行确认失败**
+
+Run: `python -m pytest tests/test_collab_judge.py -v`
+Expected: FAIL（judge.py 不存在）
+
+- [ ] **Step 3: 实现**（`src/orchestrators/collaboration/judge.py`）
+
+```python
+"""judge.py — 紧迫度判断器（V3：LLM 提议、机制裁决的单决策通道）。
+
+judge 协议：输入仲裁上下文，输出各角色紧迫度 + 是否建议沉默 + 来源。
+- RulesJudge：规则链映射（默认，零 LLM，行为与 V2 仲裁完全一致）。
+- LLMJudge：轻量 LLM 判断（预算控制 + 失败回退 RulesJudge），Task 7 实现。
+
+护栏不在此层：互斥/冷却/排队由 arbitrator 在 judge 之后统一执行。
+"""
+from dataclasses import dataclass
+from typing import Dict, List, Protocol
+
+from src.orchestrators.collaboration.rules import (
+    ArbitrationContext, Rule, RuleVerdict,
+)
+
+
+@dataclass
+class UrgencyResult:
+    urgencies: Dict[str, float]   # role -> 0..1（空 dict 表示无角色回应）
+    silent: bool                  # 是否建议沉默
+    reason: str                   # 审计：judge 依据（mention:lilith / llm / fallback:*）
+    source: str = "rules"         # rules | llm | rules-fallback
+
+
+class UrgencyJudge(Protocol):
+    """紧迫度判断器协议：输入仲裁上下文，输出各角色紧迫度。"""
+
+    def judge(self, ctx: ArbitrationContext) -> UrgencyResult: ...
+
+
+class RulesJudge:
+    """规则链 → 紧迫度：按既有链序取首个非 None 胜者 → urgency=confidence，
+    其余角色 0；链尾无命中（含空在场）→ silent=True。
+
+    行为与 V2 仲裁（规则链首个非 None 即胜出）完全一致，作为默认判断器。
+    """
+
+    def __init__(self, rules: List[Rule]):
+        self._rules = list(rules)
+
+    def judge(self, ctx: ArbitrationContext) -> UrgencyResult:
+        for rule in self._rules:
+            verdict: RuleVerdict = rule.evaluate(ctx)
+            if verdict.role is not None:
+                return UrgencyResult({verdict.role: verdict.confidence}, False,
+                                     verdict.reason, "rules")
+        return UrgencyResult({}, True, "no-rule-hit", "rules")
+```
+
+- [ ] **Step 4: 运行确认通过**
+
+Run: `python -m pytest tests/test_collab_judge.py -v`
+Expected: PASS
+
+- [ ] **Step 5: 提交**
+
+```bash
+git add src/orchestrators/collaboration/judge.py tests/test_collab_judge.py
+git commit -m "feat(collab): 紧迫度协议 + RulesJudge（V3 判断器底座，零行为变化）"
+```
+
+---
+
+### Task 7: LLMJudge + 预算/回退
+
+**Files:**
+- Modify: `src/orchestrators/collaboration/judge.py`（追加 LLMJudge）
+- Modify: `tests/test_collab_judge.py`
+
+- [ ] **Step 1: 写失败测试**
+
+```python
+class FakeLLM:
+    """可控 LLM：按注入回复序列返回；可配置抛错。"""
+    def __init__(self, replies=None, error=None):
+        self._replies = list(replies or [])
+        self._error = error
+        self.calls = 0
+
+    def _chat(self, payload):
+        self.calls += 1
+        if self._error:
+            raise self._error
+        if self._replies:
+            reply = self._replies.pop(0)
+        else:
+            reply = '{"yuki": 0.2, "lilith": 0.8, "silent": false}'
+        return {"ok": True, "data": {"reply": reply}}
+
+
+def _judge_ctx(text="随便聊聊"):
+    return _ctx(text)
+
+
+def test_llm_judge_parses_urgencies():
+    j = LLMJudge(FakeLLM(), FakeProfiles(), budget_per_min=10, rules_order=["random"], rng_seed=1)
+    r = j.judge(_judge_ctx())
+    assert r.urgencies["lilith"] == 0.8 and r.silent is False and r.source == "llm"
+
+
+def test_llm_judge_silent_true():
+    llm = FakeLLM(replies=['{"yuki": 0.1, "lilith": 0.1, "silent": true}'])
+    j = LLMJudge(llm, FakeProfiles(), budget_per_min=10, rules_order=["random"], rng_seed=1)
+    r = j.judge(_judge_ctx())
+    assert r.silent is True
+
+
+def test_llm_judge_fallback_on_error():
+    j = LLMJudge(FakeLLM(error=RuntimeError("boom")), FakeProfiles(),
+                 budget_per_min=10, rules_order=["random"], rng_seed=1)
+    r = j.judge(_judge_ctx())
+    assert r.source == "rules-fallback" and r.silent is False
+
+
+def test_llm_judge_fallback_on_bad_json():
+    j = LLMJudge(FakeLLM(replies=["这不是 JSON"]), FakeProfiles(),
+                 budget_per_min=10, rules_order=["random"], rng_seed=1)
+    r = j.judge(_judge_ctx())
+    assert r.source == "rules-fallback"
+
+
+def test_llm_judge_budget_exhausted_falls_back():
+    llm = FakeLLM()
+    j = LLMJudge(llm, FakeProfiles(), budget_per_min=2, rules_order=["random"], rng_seed=1)
+    j.judge(_judge_ctx())
+    j.judge(_judge_ctx())
+    r = j.judge(_judge_ctx())   # 第 3 次：预算耗尽
+    assert r.source == "rules-fallback"
+    assert llm.calls == 2       # 未发起第 3 次 LLM 调用
+```
+
+- [ ] **Step 2: 运行确认失败**
+
+Run: `python -m pytest tests/test_collab_judge.py::test_llm_judge_parses_urgencies -v`
+Expected: FAIL（LLMJudge 不存在）
+
+- [ ] **Step 3: 实现**（`src/orchestrators/collaboration/judge.py` 追加）
+
+```python
+import json
+import re
+import threading
+import time
+
+from src.orchestrators.collaboration.rules import make_rules_by_order
+
+DEFAULT_RULES_ORDER = ["mention", "intent", "continuation", "relevance",
+                       "balance", "cooldown", "random"]
+_JUDGE_SYSTEM = (
+    "你是直播间双虚拟主播的发言权判断器。根据弹幕/情境判断 Yuki 与 Lilith "
+    "谁更应当说话（或都不说话）。只输出 JSON，不要其它文字："
+    '{"yuki": 0到1的紧迫度, "lilith": 0到1的紧迫度, "silent": true或false}'
+)
+_JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+
+class LLMJudge:
+    """轻量 LLM 判断：注入弹幕 + 最近话轮 + 角色画像 → 结构化紧迫度。
+
+    预算：budget_per_min 次/分钟（成功调用计数），超预算回退 RulesJudge。
+    失败：LLM 异常 / JSON 解析失败 → 回退 RulesJudge（source=rules-fallback）。
+    """
+
+    def __init__(self, llm, profiles, budget_per_min: int = 4,
+                 rules_order: Optional[List[str]] = None,
+                 rng_seed: Optional[int] = None):
+        self._llm = llm
+        self._profiles = profiles
+        self._budget = max(1, int(budget_per_min))
+        self._calls: List[float] = []
+        self._lock = threading.Lock()
+        self._fallback = RulesJudge(
+            make_rules_by_order(rules_order or DEFAULT_RULES_ORDER, seed=rng_seed))
+
+    def _budget_available(self) -> bool:
+        now = time.time()
+        with self._lock:
+            self._calls = [t for t in self._calls if now - t < 60.0]
+            return len(self._calls) < self._budget
+
+    def _fallback_result(self, note: str, ctx) -> UrgencyResult:
+        r = self._fallback.judge(ctx)
+        return UrgencyResult(r.urgencies, r.silent, f"fallback:{note}", "rules-fallback")
+
+    def _build_prompt(self, ctx: ArbitrationContext) -> str:
+        turns = []
+        history_fn = getattr(ctx.turn_tracker, "turn_history", None)
+        if callable(history_fn):
+            for t in (history_fn(limit=5) or []):
+                if t.get("role") and t.get("text"):
+                    turns.append(f"{t['role']}: {t['text'][:60]}")
+        personas = {}
+        for role in sorted(ctx.present_roles):
+            try:
+                p = self._profiles.load(role)
+                personas[role] = (getattr(p, "system_prompt", "") or "")[:120]
+            except Exception:
+                personas[role] = ""
+        return (
+            f"弹幕：{ctx.text}\n"
+            f"最近对话：\n" + ("\n".join(turns[-3:]) or "（无）") + "\n"
+            f"角色画像：\n" + "\n".join(f"{r}: {personas[r] or '（无）'}"
+                                        for r in sorted(ctx.present_roles)) + "\n"
+            f"在场：{sorted(ctx.present_roles)}"
+        )
+
+    def _parse(self, reply: str):
+        m = _JSON_RE.search(reply or "")
+        if not m:
+            raise ValueError("reply 无 JSON")
+        data = json.loads(m.group(0))
+        urgencies = {}
+        for role in (data or {}):
+            if role == "silent":
+                continue
+            try:
+                urgencies[role] = max(0.0, min(1.0, float(data[role])))
+            except (TypeError, ValueError):
+                continue
+        silent = bool((data or {}).get("silent", False))
+        return urgencies, silent
+
+    def judge(self, ctx: ArbitrationContext) -> UrgencyResult:
+        if not self._budget_available():
+            return self._fallback_result("budget", ctx)
+        try:
+            resp = self._llm._chat({
+                "text": self._build_prompt(ctx),
+                "system_prompt": _JUDGE_SYSTEM,
+                "history": [],
+            })
+            reply = ((resp or {}).get("data") or {}).get("reply", "") or ""
+            urgencies, silent = self._parse(reply)
+        except Exception as exc:
+            return self._fallback_result(f"llm-error:{type(exc).__name__}", ctx)
+        with self._lock:
+            self._calls.append(time.time())
+        return UrgencyResult(urgencies, silent, "llm", "llm")
+```
+
+- [ ] **Step 4: 运行确认通过 + 回归**
+
+Run: `python -m pytest tests/test_collab_judge.py -v`
+Expected: PASS
+
+- [ ] **Step 5: 提交**
+
+```bash
+git add src/orchestrators/collaboration/judge.py tests/test_collab_judge.py
+git commit -m "feat(collab): LLMJudge（紧迫度判断 + 预算控制 + 失败/超预算回退）"
+```
+
+---
+
+### Task 8: arbitrator 接入 judge + 事件 + 配置 + 装配
+
+**Files:**
+- Modify: `src/orchestrators/collaboration/arbitrator.py`
+- Modify: `src/orchestrators/collaboration/coordinator.py`（judge 透传）
+- Modify: `src/shared/events.py`（`COLLAB_JUDGE` + ALL_EVENTS）
+- Modify: `config/config.yaml`（`collaboration.judge` / `llm_judge`）
+- Modify: `src/app.py`（装配 judge）
+- Modify: `tests/test_collab_arbitrator.py` / `tests/test_collab_judge.py` / `tests/test_p2_app_boot.py`
+
+- [ ] **Step 1: 写失败测试**（`tests/test_collab_arbitrator.py` 追加）
+
+```python
+def test_arbitrate_with_judge_llm_urgency():
+    """LLM judge 模式：取紧迫度最大者。"""
+    class FakeJudge:
+        source = "test"
+        def judge(self, ctx):
+            return UrgencyResult({"yuki": 0.2, "lilith": 0.9}, False, "llm", "llm")
+    arb = SpeakerArbitrator(profiles=FakeProfiles(), event_bus=EventBus(),
+                            judge=FakeJudge())
+    v = arb.arbitrate("danmaku", "随便聊聊", "观众", "danmaku")
+    assert v.role == "lilith"
+
+
+def test_arbitrate_judge_silent_no_speech():
+    class SilentJudge:
+        def judge(self, ctx):
+            return UrgencyResult({}, True, "silent", "llm")
+    arb = SpeakerArbitrator(profiles=FakeProfiles(), event_bus=EventBus(),
+                            judge=SilentJudge())
+    v = arb.arbitrate("danmaku", "随便聊聊", "观众", "danmaku")
+    assert v.role is None
+    assert arb._tt.current_speaker is None   # 未占用互斥
+
+
+def test_arbitrate_publishes_judge_event():
+    bus = EventBus()
+    seen = []
+    bus.subscribe(COLLAB_JUDGE, lambda event, **kw: seen.append(kw))
+    arb = SpeakerArbitrator(profiles=FakeProfiles(), event_bus=bus)
+    arb.arbitrate("danmaku", "@Lilith 你怎么看", "观众", "danmaku")
+    assert seen and seen[0]["source"] == "rules"
+    assert "latency" in seen[0]
+```
+
+- [ ] **Step 2: 运行确认失败**
+
+Run: `python -m pytest tests/test_collab_arbitrator.py::test_arbitrate_with_judge_llm_urgency -v`
+Expected: FAIL（arbitrate 无 judge 参数）
+
+- [ ] **Step 3: 实现**
+
+3a) `src/shared/events.py`：新增 `COLLAB_JUDGE = "collab:judge"` 并加入 `ALL_EVENTS`（同步运行 `tests/test_events_schema.py` 确认 schema 校验通过）。
+
+3b) `src/orchestrators/collaboration/arbitrator.py`：
+
+```python
+import random
+import time
+
+class SpeakerArbitrator:
+    def __init__(self, profiles=None, event_bus=None, lead_role="yuki",
+                 rules_order=None, seed=None, judge=None, turn_tracker=None):
+        # ... 既有字段 ...
+        self._rng = random.Random(seed)
+        self._judge = judge or RulesJudge(self._rules)
+
+    def set_judge(self, judge) -> None:
+        """运行时替换判断器（app 装配 llm judge 用）。"""
+        self._judge = judge
+
+    def _select_winner(self, urgencies):
+        top = max(urgencies.values())
+        tied = [r for r, u in urgencies.items() if u == top]
+        if len(tied) == 1:
+            return tied[0]
+        idle = {r: self._tt.idle_seconds(r) for r in tied}
+        max_idle = max(idle.values())
+        idle_winners = [r for r, v in idle.items() if v == max_idle]
+        if len(idle_winners) == 1:
+            return idle_winners[0]
+        return self._rng.choice(sorted(idle_winners))
+
+    def arbitrate(self, source, text, user_name, kind, requester_role="", ref_text=""):
+        request_id = <沿用既有 arbitrate 内 request_id 生成逻辑，不变>
+        ctx = ArbitrationContext(text=text, user_name=user_name, source=source,
+                                 kind=kind, lead_role=self._lead_role,
+                                 present_roles=self._present_roles(),
+                                 profiles=self._profiles, turn_tracker=self._tt)
+        start = time.perf_counter()
+        result = self._judge.judge(ctx)
+        latency = time.perf_counter() - start
+        self._publish_judge(result, latency)
+        hit = result.reason
+        if result.silent or not result.urgencies:
+            return ArbitrationVerdict(None, hit, request_id)
+        winner = self._select_winner(result.urgencies)
+        # 互斥/入队/优先级/发布事件：与既有逻辑完全一致（acquire 失败 → enqueue + deferred）
+        ...
+
+    def _publish_judge(self, result: UrgencyResult, latency: float) -> None:
+        """发布 collab:judge 事件（成本可观测：来源 + 耗时 + 紧迫度）。"""
+        self._event_bus.publish(
+            COLLAB_JUDGE,
+            urgencies=result.urgencies, silent=result.silent,
+            reason=result.reason, source=result.source, latency=round(latency, 4))
+```
+
+3c) `coordinator.py`：构造新增 `judge=None` 参数并透传 `SpeakerArbitrator(..., judge=judge)`。
+
+3d) `config/config.yaml`：
+
+```yaml
+collaboration:
+  judge: rules            # rules | llm（V3 切换点）
+  llm_judge:
+    budget_per_min: 4     # 每分钟最多 LLM 判断次数；超预算回退规则
+```
+
+3e) `src/app.py`（collaboration 装配块内，`collaboration.start()` 之前）：
+
+```python
+judge_mode = str(collab_cfg.get("judge", "rules"))
+judge_obj = None
+if judge_mode == "llm":
+    from src.orchestrators.collaboration.judge import LLMJudge
+    judge_cfg = collab_cfg.get("llm_judge") or {}
+    judge_obj = LLMJudge(
+        llm_orch, collab_profiles,
+        budget_per_min=int(judge_cfg.get("budget_per_min", 4)),
+        rules_order=collab_cfg.get("rules_order"))
+```
+并将 `judge=judge_obj` 传入 `CollaborationCoordinator`。
+
+- [ ] **Step 4: 回归 + 新测试**
+
+Run: `python -m pytest tests/test_collab_arbitrator.py tests/test_collab_judge.py tests/test_collab_coordinator.py tests/test_events_schema.py tests/test_p2_app_boot.py -q`
+Expected: PASS（默认 judge=RulesJudge 时既有行为零变化；events schema 校验含新事件）
+
+Run: `python -m pytest -q`
+Expected: 全部通过
+
+- [ ] **Step 5: 提交**
+
+```bash
+git add src/orchestrators/collaboration/arbitrator.py src/orchestrators/collaboration/coordinator.py src/shared/events.py config/config.yaml src/app.py tests/test_collab_arbitrator.py tests/test_collab_judge.py
+git commit -m "feat(collab): arbitrator 接入紧迫度判断器（judge 可插拔 + 事件 + 配置）"
+```
+
+> 注意：`arbitrator.py` / `coordinator.py` / `events.py` / `app.py` 可能含并行工作改动，提交前用"备份→摘除→提交→恢复"模式确保零污染（参照 T16 做法）；`events.py` 若含并行未提交修改，先确认其归属。
+
+---
+
+## V3 验收标准（复述）
+
+1. `judge: rules` 时行为与 V2 完全一致（默认 RulesJudge，全量回归）。
+2. `judge: llm` 时紧迫度取最大者发言，silent 时不发言（mock LLM 测试）。
+3. 预算耗尽/LLM 失败 → 自动回退 RulesJudge，链路不中断（`rules-fallback` 事件可见）。
+4. 互斥/冷却/排队护栏在两种 judge 下均生效（复用既有测试）。
+5. 成本可观测：`collab:judge` 事件记录 source（rules/llm）与耗时 latency。
 
 ---
 

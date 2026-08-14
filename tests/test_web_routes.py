@@ -112,3 +112,13 @@ def test_switch_missing_enabled_400():
     app = create_app(_make_context())
     resp = app.test_client().post("/api/switch/llm", json={})
     assert resp.status_code == 400
+
+
+def test_state_returns_version():
+    # 用既有 test app fixture 写法（无 build_test_app helper，适配现有 _make_context）
+    app = create_app(_make_context())
+    client = app.test_client()
+    resp = client.get("/api/state")
+    data = resp.get_json()
+    assert "version" in data
+    assert isinstance(data["version"], int)

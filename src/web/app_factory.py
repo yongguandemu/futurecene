@@ -70,6 +70,15 @@ def create_app(context: Optional[Dict] = None) -> Flask:
                         "circuit_breaker": context.get("cost_breaker").snapshot()
                         if context.get("cost_breaker") else {}})
 
+    # /api/decisions：决策日志（区分「没收到」与「决定不回应」，规格书 5.6.4）
+    @app.get("/api/decisions")
+    def decisions():
+        dlog = context.get("decision_log")
+        if dlog is None:
+            return jsonify({"entries": [], "stats": {}})
+        entries = [e.to_dict() for e in dlog["recent"](100)]
+        return jsonify({"entries": entries, "stats": dlog["stats"]()})
+
     # POST /api/collab/config：多角色运行时调参（白名单，重启回落 config.yaml）
     # 未装配（collaboration.enabled=false / COLLAB_ENABLED 未设）返回 404；
     # 请求体无白名单字段返回 400；白名单字段非法（类型/范围，见 coerce_runtime_field）

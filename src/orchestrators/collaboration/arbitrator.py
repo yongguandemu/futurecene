@@ -14,6 +14,9 @@ from src.orchestrators.collaboration.rules import (
     ArbitrationContext, Rule, build_default_rules, make_rules_by_order,
 )
 from src.orchestrators.collaboration.turn_tracker import TurnTracker
+from src.shared.decision_log import (
+    OUTCOME_DEFERRED, OUTCOME_EXECUTED, OUTCOME_NO_ACTION, record_decision,
+)
 from src.shared.events import SPEECH_ARBITRATED
 
 logger = logging.getLogger(__name__)
@@ -74,6 +77,12 @@ class SpeakerArbitrator:
                 hit = verdict.reason
                 break
         if winner is None:
+            # 决策日志：规则链全链未命中 = 显式的「决定不回应」（区别于没收到）
+            record_decision(source="arbitrator", outcome=OUTCOME_NO_ACTION,
+                            reason_code="arbitrate_no_winner",
+                            layer="L2", capability="collab:arbitrate",
+                            detail="规则链未命中，静默不回应: hit={}".format(hit),
+                            decision_id=request_id)
             return ArbitrationVerdict(None, hit, request_id, deferred=False)
 
         request = {"role": winner, "priority": self._priority(kind, hit),
@@ -81,8 +90,18 @@ class SpeakerArbitrator:
         if not self._tt.acquire(winner):
             self._tt.enqueue(request)     # 有人正发言：入队等待
             self._publish(winner, hit, request_id, deferred=True)
+            record_decision(source="arbitrator", outcome=OUTCOME_DEFERRED,
+                            reason_code="speech_queue_deferred",
+                            layer="L2", capability="collab:arbitrate",
+                            detail="{} 获发言权但互斥中，入队待发: {}".format(winner, hit),
+                            decision_id=request_id)
             return ArbitrationVerdict(None, hit, request_id, deferred=True)
         self._publish(winner, hit, request_id, deferred=False)
+        record_decision(source="arbitrator", outcome=OUTCOME_EXECUTED,
+                        reason_code="arbitrated",
+                        layer="L2", capability="collab:arbitrate",
+                        detail="{} 获发言权: {}".format(winner, hit),
+                        decision_id=request_id)
         return ArbitrationVerdict(winner, hit, request_id, deferred=False)
 
     @staticmethod

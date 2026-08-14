@@ -74,6 +74,9 @@ from src.orchestrators.experience_orchestrator.task_planner import TaskPlanner
 from src.orchestrators.experience_orchestrator.auto_curriculum import AutoCurriculum
 from src.orchestrators.experience_orchestrator import primitives
 from src.orchestrators.experience_orchestrator import game_registry
+from src.shared.decision_log import (
+    OUTCOME_FAILED, OUTCOME_NO_ACTION, record_decision,
+)
 from src.shared.events import (
     EXPERIENCE_RECORDED, EXPERIENCE_QUERIED, EXPERIENCE_GOAL_COMPLETED,
 )
@@ -168,6 +171,11 @@ class ExperienceLearnBrain:
         goal = (goal or "").strip()
         if not goal:
             logger.warning("[LearnBrain] 外部任务注入失败: goal 为空")
+            record_decision(source="learn_brain", outcome=OUTCOME_NO_ACTION,
+                            reason_code="empty_goal",
+                            layer="L3", capability="experience:inject_task",
+                            detail="外部任务注入 goal 为空，拒绝",
+                            min_interval=30)
             return False
         scene = self.adapter.last_scene if hasattr(self.adapter, "last_scene") else {}
         st = scene.get("state") or {}
@@ -329,8 +337,19 @@ class ExperienceLearnBrain:
     def _decide(self, state: GameState, scene: dict):
         now = time.time()
         if now < self._fuse_until:
+            record_decision(source="learn_brain", outcome=OUTCOME_NO_ACTION,
+                            reason_code="fuse_paused",
+                            layer="L1", capability="experience:decide",
+                            detail="熔断中，剩余 {:.0f}s".format(self._fuse_until - now),
+                            min_interval=60)
             return
         if now - self._last_action_time < self.post_action_cooldown:
+            record_decision(source="learn_brain", outcome=OUTCOME_NO_ACTION,
+                            reason_code="post_action_cooldown",
+                            layer="L1", capability="experience:decide",
+                            detail="动作冷却中，剩余 {:.0f}s".format(
+                                self.post_action_cooldown - (now - self._last_action_time)),
+                            min_interval=30)
             return
         hits = self._store.query(state)
         if hits:
@@ -403,6 +422,12 @@ class ExperienceLearnBrain:
                 self._last_state = state
                 self._last_action = proposal[0]
                 self._last_action_time = now
+        # 走到这里 = 本轮未下发任何动作，显式记录「决定不动作」
+        record_decision(source="learn_brain", outcome=OUTCOME_NO_ACTION,
+                        reason_code="no_candidate_action",
+                        layer="L1", capability="experience:decide",
+                        detail="经验/技能/规则/子任务/LLM 均无候选动作",
+                        min_interval=30)
 
     def _rule_decide(self, scene: dict):
         text = (scene.get("text") or "").strip()
@@ -497,6 +522,12 @@ class ExperienceLearnBrain:
             ok = False
         if ok:
             logger.info("[LearnBrain] 下发操作: %s %s", action, args)
+        else:
+            record_decision(source="learn_brain", outcome=OUTCOME_FAILED,
+                            reason_code="push_failed",
+                            layer="L1", capability="experience:decide",
+                            detail="动作下发失败: {} (adapter 无 _push_operation 或异常)".format(action),
+                            min_interval=60)
         return ok
 
     def on_feedback(self, state_changed: bool, event_positive: bool = False,

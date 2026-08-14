@@ -53,6 +53,8 @@ from src.orchestrators.stream_orchestrator.stream_code_refresher import StreamCo
 from src.orchestrators.tts_orchestrator import TTSOrchestrator  # noqa: E402
 from src.shared.config_loader import ConfigLoader, load  # noqa: E402
 from src.shared.crash_reporter import CrashReporter  # noqa: E402
+from src.shared.decision_log import attach as attach_decision_log  # noqa: E402
+from src.shared.decision_log import clear_log, log_stats, recent_entries  # noqa: E402
 from src.shared.event_bus import EventBus  # noqa: E402
 from src.shared.logger import get  # noqa: E402
 from src.shared.watchdog import Watchdog  # noqa: E402
@@ -99,6 +101,7 @@ def _role_topic(role: str, profiles, session, collaboration, llm_orch) -> dict:
 def build_app_context():
     """装配全部组件，返回 Flask 应用与事件总线（便于测试复用）。"""
     event_bus = EventBus()
+    attach_decision_log(event_bus)      # 决策日志接入事件总线（decision:logged）
     switch_manager = SwitchManager(event_bus)
     registry = OrchestratorRegistry(switch_manager, event_bus)
     session = SessionContext(session_id="default")
@@ -265,6 +268,8 @@ def build_app_context():
         "state_publisher": state_publisher,
         "collaboration": collaboration,
         "profiles": collab_profiles if collaboration else None,
+        "decision_log": {"recent": recent_entries, "stats": log_stats,
+                         "clear": clear_log},
     }
     return create_app(context), event_bus
 

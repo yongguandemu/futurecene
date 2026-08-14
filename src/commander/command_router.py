@@ -20,6 +20,7 @@ import uuid
 from typing import Any, Dict, Optional
 
 from src.commander.intent_parser import Command
+from src.shared.decision_log import OUTCOME_BLOCKED, OUTCOME_FAILED, record_decision
 from src.shared.events import (
     COMMAND_COMPLETED,
     COMMAND_FAILED,
@@ -85,9 +86,19 @@ class CommandRouter:
         # D4 纪律：调用前必须检查开关
         orch = self._registry.match(command.capability)
         if orch is None:
+            record_decision(source="command_router", outcome=OUTCOME_FAILED,
+                            reason_code="unknown_capability",
+                            layer="L3", capability=command.capability,
+                            detail="指挥官无法路由，无该能力注册",
+                            decision_id=cid)
             return {"ok": False, "error": f"unknown capability: {command.capability}",
                     "command_id": cid}
         if not self._switch_manager.is_enabled(orch.name):
+            record_decision(source="command_router", outcome=OUTCOME_BLOCKED,
+                            reason_code="orchestrator_disabled",
+                            layer="L1", capability=command.capability,
+                            detail="调度官开关关闭（授权收回），拒绝执行: {}".format(orch.name),
+                            decision_id=cid)
             return {"ok": False, "error": f"orchestrator disabled: {orch.name}",
                     "command_id": cid}
 

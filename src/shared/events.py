@@ -138,6 +138,9 @@ HEAT_UPDATED = "heat:updated"                         # 直播间热度指标更
 # ========== 主动对话域（P2 补全） ==========
 ACTIVE_DIALOGUE = "dialogue:active"                     # 主动对话生成（冷场救星）
 
+# ========== 决策日志域（决策分级） ==========
+DECISION_LOGGED = "decision:logged"                     # 决策日志（outcome/reason_code；no_action 即为何不回应）
+
 # ========== 注册表（实现辅助，供 EventBus 校验） ==========
 # 所有已注册事件名集合。新增事件常量后，此处须同步收录（唯一校验来源）。
 ALL_EVENTS = frozenset({
@@ -217,4 +220,5 @@ ALL_EVENTS = frozenset({
     PACE_DECIDED,
     HEAT_UPDATED,
     ACTIVE_DIALOGUE,
+    DECISION_LOGGED,
 })

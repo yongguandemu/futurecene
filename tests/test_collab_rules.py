@@ -63,6 +63,35 @@ def test_mention_rule_word_boundary():
     assert r.evaluate(_ctx("@lilith 你看 yuki酱")).role == "lilith"
 
 
+def test_mention_rule_not_present_no_reassign():
+    """规格 §8.1（终审 M1）：显式命中的角色不在场 → 返回 None，不转派其它角色。"""
+    r = MentionRule()
+    # lilith 不在场：@Lilith 显式指向 lilith → 不得转派给在场的 yuki
+    ctx = _ctx("@Lilith 你同意吗")
+    ctx.present_roles = {"yuki"}
+    v = r.evaluate(ctx)
+    assert v.role is None
+    assert v.reason == "mention-not-present"
+    assert v.confidence == 0.0
+
+
+def test_mention_rule_first_present_wins():
+    """规格 §8.1（终审 M1）：同时命中多个角色 → 取第一个在场者（按命中位置）。"""
+    r = MentionRule()
+    # 双命中且都在场：@lilith 位置最早 → lilith
+    assert r.evaluate(_ctx("@lilith 你看 @yuki 怎么样")).role == "lilith"
+    # lilith 不在场但 yuki 在场：取第一个在场者 yuki（不返回 None）
+    ctx = _ctx("@lilith 你看 @yuki 怎么样")
+    ctx.present_roles = {"yuki"}
+    assert r.evaluate(ctx).role == "yuki"
+    # 全部命中角色不在场：mention-not-present
+    ctx2 = _ctx("@lilith 你看 @yuki 怎么样")
+    ctx2.present_roles = set()
+    v = r.evaluate(ctx2)
+    assert v.role is None
+    assert v.reason == "mention-not-present"
+
+
 def test_intent_rule_routes_to_lead():
     r = IntentRule()
     assert r.evaluate(_ctx("下播", lead="yuki")).role == "yuki"

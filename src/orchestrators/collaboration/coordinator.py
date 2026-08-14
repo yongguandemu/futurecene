@@ -12,7 +12,7 @@
 
 事件接线：
 - danmaku:received         → _on_danmaku（未启动/命令前缀过滤）→ 仲裁 → _execute
-- dialogue:active          → _on_active_dialogue（冷场闲聊：role 非空直发，否则仲裁 kind="active"）→ _execute
+- dialogue:active          → _on_active_dialogue（冷场闲聊：统一仲裁 kind="active"，不直发）→ _execute
 - speech:completed         → 记录话轮（唯一记录点）+ triggers 评估 → 发布 collab:utterance_requested
 - collab:utterance_requested → _on_utterance_requested → request_utterance → 回仲裁 → _execute
 - character:presence_changed → _on_presence_changed → _sync_present_roles（在场名单单源同步，
@@ -182,16 +182,15 @@ class CollaborationCoordinator:
                             role: str = "", **kw) -> None:
         """冷场自发闲聊（Task 18）：active_dialogue 主动话题 → 仲裁谁先说 → 执行。
 
-        - role 非空：话题已指定角色（角色化生成，如 tick(role)），直接执行不再仲裁；
-        - role 为空：走仲裁（kind="active"，冷场发言优先级低于用户弹幕与接话）。
+        一律先仲裁（kind="active"，冷场话题优先级 P4），放行才 _execute，不直发：
+        显式 role（如 tick(role)）不再绕过互斥直接执行——角色是否在场由文本
+        @role 链路（MentionRule）与在场名单决定，互斥被占用时入队等待
+        （终审 I2：冷场直发绕过互斥）。
         """
         if not self._started:
             return
         text = (text or "").strip()
         if not text:
-            return
-        if role:
-            self._execute(role, text, kind="active")
             return
         verdict = self._arb.arbitrate("active", text, "", kind="active")
         if verdict.role:

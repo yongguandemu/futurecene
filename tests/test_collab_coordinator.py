@@ -62,7 +62,8 @@ class BlockingPipeline(FakePipeline):
     async def execute_with(self, text, role, system_prompt="", turn_context=None):
         await super().execute_with(text, role, system_prompt, turn_context)
         if len(self.calls) == 1:
-            self._gate.wait(timeout=2.0)   # 首条阻塞至 release_gate
+            # 首条阻塞至 release_gate；timeout 放大到 10s（终审 c：防慢机 flaky）
+            self._gate.wait(timeout=10.0)
         return {"ok": True, "data": {"reply": "ok", "audio_id": "a1"}}
 
     def release_gate(self):
@@ -165,16 +166,19 @@ def test_deferred_queue_drained_after_completion():
     co = _make_coordinator(bus, pipeline=pipeline)
     co.start()
     bus.publish("danmaku:received", content="@Lilith 第一句", user_name="观众甲")
-    assert _wait_until(lambda: len(pipeline.calls) == 1), "首条执行未开始"
-    # 首条仍在执行（互斥占用），第二条仲裁应 deferred 入队
+    assert _wait_until(lambda: len(pipeline.calls) == 1, timeout=5.0), "首条执行未开始"
+    # 互斥语义（终审 c）：首条仍在执行，current_speaker 应仍被 lilith 占用
+    assert _wait_until(lambda: co._tt.current_speaker == "lilith", timeout=5.0), \
+        "首条占用期间互斥应被持有"
+    # 第二条仲裁应 deferred 入队
     bus.publish("danmaku:received", content="@Lilith 第二句", user_name="观众乙")
-    assert _wait_until(lambda: co._tt.pending_count() == 1), "第二条未入待发队列"
+    assert _wait_until(lambda: co._tt.pending_count() == 1, timeout=5.0), "第二条未入待发队列"
     assert pipeline.calls[-1]["text"] == "@Lilith 第一句"
     # 首条完成 → finally 释放互斥 → 排空队列 → 第二条自动执行
     pipeline.release_gate()
-    assert _wait_until(lambda: len(pipeline.calls) == 2), "deferred 未在完成时排空"
+    assert _wait_until(lambda: len(pipeline.calls) == 2, timeout=5.0), "deferred 未在完成时排空"
     assert pipeline.calls[1]["text"] == "@Lilith 第二句"
-    assert _wait_until(lambda: co._tt.current_speaker is None), "互斥未释放"
+    assert _wait_until(lambda: co._tt.current_speaker is None, timeout=5.0), "互斥未释放"
     co.stop()
 
 
@@ -195,16 +199,37 @@ def test_active_dialogue_arbitrates_speaker():
     co.stop()
 
 
-def test_active_dialogue_with_role_executes_directly():
-    """冷场自发闲聊（Task 18）：dialogue:active 带 role → 直接执行该角色，不走仲裁。"""
+def test_active_dialogue_with_role_arbitrates_and_releases():
+    """终审 I2：dialogue:active 带 role 仍走仲裁——角色在场且互斥空闲时放行执行，
+    不再绕过互斥直发（直发语义已删除）。文本 @角色 由 MentionRule 命中，确定性放行。"""
     bus = EventBus()
     pipeline = FakePipeline()
     co = _make_coordinator(bus, pipeline=pipeline, trigger_probability=0.0)
     co.start()
-    bus.publish("dialogue:active", text="大家好呀，我来开个话题", mood="happy", role="lilith")
-    assert _wait_until(lambda: len(pipeline.calls) == 1), "指定角色未直接执行"
+    bus.publish("dialogue:active", text="@Lilith 大家好呀，来开个话题", mood="happy", role="lilith")
+    assert _wait_until(lambda: len(pipeline.calls) == 1), "指定角色未执行"
     assert pipeline.calls[0]["role"] == "lilith"
     assert _wait_until(lambda: co._tt.current_speaker is None), "互斥未释放"
+    co.stop()
+
+
+def test_active_dialogue_with_role_queues_when_mutex_busy():
+    """终审 I2：带 role 的冷场话题在互斥被占用时入队等待，不直发绕过互斥。"""
+    bus = EventBus()
+    pipeline = BlockingPipeline()
+    co = _make_coordinator(bus, pipeline=pipeline, trigger_probability=0.0)
+    co.start()
+    bus.publish("danmaku:received", content="@Lilith 第一句", user_name="观众甲")
+    assert _wait_until(lambda: len(pipeline.calls) == 1, timeout=5.0), "首条执行未开始"
+    assert _wait_until(lambda: co._tt.current_speaker == "lilith", timeout=5.0), "互斥未占用"
+    bus.publish("dialogue:active", text="@Lilith 大家好呀，来开个话题", mood="happy", role="lilith")
+    assert _wait_until(lambda: co._tt.pending_count() == 1, timeout=5.0), \
+        "带 role 冷场话题未入队（直发绕过互斥）"
+    assert len(pipeline.calls) == 1, "互斥占用期间不应直发执行"
+    pipeline.release_gate()
+    assert _wait_until(lambda: len(pipeline.calls) == 2, timeout=5.0), "deferred 未在完成时排空"
+    assert pipeline.calls[1]["role"] == "lilith"
+    assert _wait_until(lambda: co._tt.current_speaker is None, timeout=5.0), "互斥未释放"
     co.stop()
 
 

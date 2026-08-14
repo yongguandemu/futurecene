@@ -38,6 +38,13 @@ def command():
     if not text:
         return jsonify({"ok": False, "error": "text 必填"}), 400
 
+    # 多角色定向（规格书 6.5/8：输入框 @角色 前缀 → target_role）：
+    # 前端已剥离 @ 前缀只发正文，这里拼回 "@角色 文本" 再进解析链路，
+    # 使 MentionRule 从既有 text 链路识别显式指定角色并硬放行（终审 I1）。
+    target_role = (data.get("target_role") or "").strip()
+    if target_role:
+        text = "@{} {}".format(target_role, text)
+
     cmd = parser.parse(text, source="command",
                        session_id=data.get("session_id", "default"))
 

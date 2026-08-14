@@ -83,10 +83,13 @@ class MentionRule(Rule):
         if not hits:
             return RuleVerdict(None, 0.0, "no-mention")
         hits.sort()
+        # 规格 §8.1 不在场语义（终审 M1）：显式命中的角色不在场 → 返回 None
+        # 不转派其它角色；同时命中多个角色 → 取第一个在场者（按命中位置）；
+        # 全部命中角色不在场 → mention-not-present（区别于 no-mention）。
         for _, role in hits:
             if role in ctx.present_roles:
                 return RuleVerdict(role, 1.0, f"mention:{role}")
-        return RuleVerdict(None, 0.0, "mention-unknown")
+        return RuleVerdict(None, 0.0, "mention-not-present")
 
 
 class IntentRule(Rule):

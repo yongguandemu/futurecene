@@ -36,6 +36,13 @@
     padding: 6px 12px;
     display: none;
   }
+  /* M2 说话高亮：仲裁放行（speech:arbitrated）→ 模型容器加聚光边框；发言完成移除 */
+  #canvas-holder.actor-speaking {
+    border: 2px solid rgba(255, 196, 118, 0.7);
+    border-radius: 16px;
+    box-shadow: 0 0 26px rgba(255, 176, 64, 0.55),
+                inset 0 0 20px rgba(255, 200, 130, 0.10);
+  }
 </style>
 </head>
 <body>
@@ -118,6 +125,25 @@
     setState(role, "silent");
   }
 
+  // ---- 说话高亮（M2）：speech:arbitrated(role) 点亮，speech:completed 熄灭 ----
+  // 单画布多模型：同一时刻至多一人发声（互斥），高亮 class 作用于模型容器；
+  // actor 对象记录 speaking 状态，供后续 per-role DOM 扩展（终审 M2）。
+  function setSpeakingHighlight(role, on) {
+    var a = actors[role];
+    if (!a) return;
+    if (a.speaking === !!on) return;
+    a.speaking = !!on;
+    var holder = document.getElementById("canvas-holder");
+    if (!holder) return;
+    if (on) {
+      holder.classList.add("actor-speaking");
+      holder.setAttribute("data-speaking", role);
+    } else {
+      holder.classList.remove("actor-speaking");
+      holder.removeAttribute("data-speaking");
+    }
+  }
+
   // ---- 口型统一入口（per-role 收尾 timer + 按 audio_id 去重） ----
   // tts:audio_ready / live2d:lip_sync_start / audio:segment_ready 与 speech:completed
   // 兜底均经此处理：同一音频段仅启动一次口型；新段到达先取消旧 timer，避免截断。
@@ -178,7 +204,10 @@
     // 静默态兜底：加 audio_id 守卫，仅当仍是当前口型段时才收尾（不截断新段）
     store.subscribe("speech:completed", function (state, event) {
       var role = event.role;
-      if (!role || !actors[role]) return;
+      if (!role) return;
+      // M2：发言完成 → 移除说话高亮（与口型收尾解耦，不依赖 audio_id）
+      setSpeakingHighlight(role, false);
+      if (!actors[role]) return;
       if (actors[role].lastAudio !== event.audio_id) return;
       setTimeout(function () {
         if (actors[role].lastAudio === event.audio_id) {
@@ -186,6 +215,11 @@
           endLipSync(role);
         }
       }, 220);
+    });
+    // M2 说话高亮：仲裁放行（deferred=False 即实际开说）点亮对应角色高亮；
+    // 排队待发（deferred=True）不点亮，避免未发声先高亮
+    store.subscribe("speech:arbitrated", function (state, event) {
+      if (event.role && !event.deferred) setSpeakingHighlight(event.role, true);
     });
   }
 

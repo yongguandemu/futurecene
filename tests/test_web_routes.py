@@ -81,6 +81,41 @@ def test_command_routes_to_orchestrator():
     assert data["data"]["reply"] == "llm: done"
 
 
+class RecordingParser(IntentParser):
+    """记录 parse 收到的原文，验证路由层 target_role 拼接（终审 I1）。"""
+
+    def __init__(self):
+        super().__init__()
+        self.parsed_texts = []
+
+    def parse(self, text, source="danmaku", session_id="default"):
+        self.parsed_texts.append(text)
+        return super().parse(text, source=source, session_id=session_id)
+
+
+def test_command_target_role_prefixed_to_parser():
+    """终审 I1：body 带 target_role 时，路由层把 text 拼回 "@role 文本" 再交给 parser，
+    使 MentionRule 从既有 text 链路生效（前端 @角色 前缀 → target_role 的闭环）。"""
+    ctx = _make_context()
+    parser = RecordingParser()
+    ctx["intent_parser"] = parser
+    app = create_app(ctx)
+    client = app.test_client()
+    # 带 target_role：parse 收到 @lilith 前缀文本
+    resp = client.post("/api/command", json={"text": "你好呀", "target_role": "lilith"})
+    assert resp.status_code == 200
+    assert resp.get_json()["ok"] is True
+    assert parser.parsed_texts == ["@lilith 你好呀"]
+    # 不带 target_role：原文直传，不拼前缀
+    resp2 = client.post("/api/command", json={"text": "你好呀"})
+    assert resp2.status_code == 200
+    assert parser.parsed_texts[-1] == "你好呀"
+    # 空白 target_role：视为未指定，不拼前缀
+    resp3 = client.post("/api/command", json={"text": "你好呀", "target_role": "  "})
+    assert resp3.status_code == 200
+    assert parser.parsed_texts[-1] == "你好呀"
+
+
 def test_command_switch_role_internal():
     app = create_app(_make_context())
     client = app.test_client()

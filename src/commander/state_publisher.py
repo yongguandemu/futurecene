@@ -22,21 +22,23 @@ import logging
 from src.shared.events import (
     COST_CIRCUIT_OPEN,
     COST_MILESTONE,
+    DEGRADATION_CHANGED,
     SESSION_STATE_CHANGED,
     SESSION_SWITCHED,
     STATE_CHANGED,
     SWITCH_CHANGED,
+    WATCHDOG_CHANGED,
 )
 
 logger = logging.getLogger(__name__)
 
-# 五类触发事件（含通配符降级/看门狗域）
+# 五类触发事件
 _TRIGGER_EVENTS = [
     SWITCH_CHANGED,
     SESSION_SWITCHED,
     SESSION_STATE_CHANGED,
-    "degradation:*",
-    "watchdog:*",
+    DEGRADATION_CHANGED,
+    WATCHDOG_CHANGED,
     COST_CIRCUIT_OPEN,
     COST_MILESTONE,
 ]

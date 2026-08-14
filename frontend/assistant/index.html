@@ -791,6 +791,10 @@ const EVENT_META = {
   'session:switched':             { label: '角色/场景切换', cls: 'ev-warn', tag: '会话', domain: 'session' },
   'session:state_changed':        { label: '会话状态变更', cls: 'ev-info',  tag: '会话', domain: 'session' },
   'switch:changed':               { label: '开关变更',    cls: 'ev-warn',  tag: '开关', domain: 'switch' },
+  'state:changed':                { label: '状态快照',    cls: 'ev-info',  tag: '状态', domain: 'state' },
+  'watchdog:changed':             { label: '看门狗翻转',  cls: 'ev-warn',  tag: '运维', domain: 'ops' },
+  'degradation:changed':          { label: '降级状态变更', cls: 'ev-warn',  tag: '运维', domain: 'ops' },
+  'cost:milestone':               { label: '成本里程碑',  cls: 'ev-warn',  tag: '成本', domain: 'cost' },
   'llm:requested':                { label: 'LLM 请求',    cls: 'ev-info',  tag: 'LLM', domain: 'llm' },
   'llm:responded':                { label: 'LLM 响应',    cls: 'ev-ok',    tag: 'LLM', domain: 'llm' },
   'llm:stream_chunk':             { label: 'LLM 流式分片', cls: 'ev-info',  tag: 'LLM', domain: 'llm' },
@@ -1257,8 +1261,8 @@ function sendCommand(text, existingMsg) {
     if (result.command_id) {
       cidMap[result.command_id] = m.id;
       STATE.pendingCommands.forEach(p => { if (p.msgId === m.id) p.cid = result.command_id; });
-      const cmds = store.getState().commands;
-      cmds[result.command_id] = { status: 'sent', raw: raw, error: null };
+      // 经 store.dispatch 提交（触发订阅）；不覆盖已前进状态（running/success）
+      store.dispatch({ type: 'commander:command_received', command_id: result.command_id, raw: raw });
     }
     if (result.ok === false) {
       STATE.pendingCommands = STATE.pendingCommands.filter(p => p.msgId !== m.id);
@@ -1525,8 +1529,8 @@ async function toggleOrch(name, enable) {
   const res = await API.post('/api/switch/' + encodeURIComponent(name), { enabled: enable });
   if (res.ok && res.data) {
     if (res.data.command_id) {
-      const cmds = store.getState().commands;
-      cmds[res.data.command_id] = { status: 'sent', raw: name, error: null };
+      // 经 store.dispatch 提交（触发订阅）；不覆盖已前进状态（running/success）
+      store.dispatch({ type: 'commander:command_received', command_id: res.data.command_id, raw: name });
     }
     if (res.data.ok === false) {
       toast('开关操作失败: ' + (res.data.error || ''), 'error');

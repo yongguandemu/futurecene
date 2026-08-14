@@ -27,6 +27,7 @@ TTS_CACHE_DIR = PROJECT_ROOT / "data" / "cache" / "tts"
 sock = Sock()
 _clients = set()
 _seq_provider = None
+_event_bus = None
 
 
 def _extract_audio_id(msg) -> str:
@@ -43,10 +44,11 @@ def _extract_audio_id(msg) -> str:
 def init_ws(app, event_bus, seq_provider=None) -> None:
     """注册 WS 路由并订阅 EventBus 广播。
 
-    seq_provider: 可选 Callable[[], int]，返回 EventBus 当前 seq。
+    seq_provider: 可选 Callable[[], int]，返回 EventBus 当前 seq（回退用）。
     """
-    global _seq_provider
+    global _seq_provider, _event_bus
     _seq_provider = seq_provider
+    _event_bus = event_bus
     sock.init_app(app)
 
     @sock.route("/ws/events")
@@ -84,13 +86,19 @@ def init_ws(app, event_bus, seq_provider=None) -> None:
 
 
 def _broadcast(event: str, **data) -> None:
-    """EventBus 回调：广播事件给所有 WS 客户端（消息携带该事件自身 seq）。"""
+    """EventBus 回调：广播事件给所有 WS 客户端（消息携带该事件自身 seq/ts）。"""
     if not _clients:
         return
     try:
-        # 优先取事件自身 seq（EventBus 传入），回退当前全局 seq
-        seq = data.pop("seq", _seq_provider() if _seq_provider else 0)
-        message = json.dumps({"type": event, "seq": seq, **data},
+        # 事件自身元数据：优先 EventBus 线程局部上下文（嵌套发布时仍取当前事件），
+        # 回退 _seq_provider（无上下文场景，如测试直连）。
+        if _event_bus is not None:
+            seq, ts = _event_bus.current_event_meta()
+        else:
+            seq, ts = 0, 0.0
+        if not seq and _seq_provider is not None:
+            seq = _seq_provider()
+        message = json.dumps({"type": event, "seq": seq, "ts": ts, **data},
                              ensure_ascii=False, default=str)
     except (TypeError, ValueError) as e:
         logger.warning("[WS] 事件序列化失败: %s", e)

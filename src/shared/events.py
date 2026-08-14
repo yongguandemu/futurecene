@@ -85,6 +85,7 @@ COST_CIRCUIT_OPEN = "cost:circuit_open"               # 成本熔断器触发（
 STATE_CHANGED = "state:changed"                       # 状态快照推送（含 version，供前端全量更新）
 WATCHDOG_CHANGED = "watchdog:changed"                 # 看门狗健康状态翻转（ok↔degraded↔down）
 COST_MILESTONE = "cost:milestone"                     # 成本累计每满 1.00 元发布（触发 state:changed）
+DEGRADATION_CHANGED = "degradation:changed"           # 降级管理器变更（degrade/restore）
 
 # ========== QQ 平台域（P2） ==========
 QQ_CONNECTED = "qq:connected"                         # QQ 连接建立
@@ -178,6 +179,7 @@ ALL_EVENTS = frozenset({
     STATE_CHANGED,
     WATCHDOG_CHANGED,
     COST_MILESTONE,
+    DEGRADATION_CHANGED,
     QQ_CONNECTED,
     QQ_DISCONNECTED,
     QQ_GROUP_MESSAGE,

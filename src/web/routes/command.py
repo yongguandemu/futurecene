@@ -15,6 +15,7 @@ session:switch / system:* 为指挥官内部命令，不进调度官路由。
 """
 import asyncio
 import logging
+import uuid
 
 from flask import Blueprint, current_app, jsonify, request
 
@@ -40,12 +41,15 @@ def command():
     cmd = parser.parse(text, source="command",
                        session_id=data.get("session_id", "default"))
 
-    # 指挥官内部命令（规格书 4.4）
+    # 指挥官内部命令（规格书 4.4）；统一生成 command_id 供前端追踪
     if cmd.capability == "session:switch" and session is not None:
+        cid = uuid.uuid4().hex
         ok = session.switch_role(cmd.payload.get("role", "yuki"))
-        return jsonify({"ok": ok, "data": session.snapshot()})
+        return jsonify({"ok": ok, "command_id": cid,
+                        "data": session.snapshot()})
     if cmd.capability == "system:status":
-        return jsonify({"ok": True,
+        cid = uuid.uuid4().hex
+        return jsonify({"ok": True, "command_id": cid,
                         "data": {"note": "内部命令，由指挥官处理", "capability": cmd.capability}})
     # system:command（未知 ! 命令）不拦截，落入路由层返回 unknown capability（验收契约）
 

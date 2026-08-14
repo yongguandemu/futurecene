@@ -25,11 +25,24 @@ DEGRADABLE_ORCHESTRATORS = {"game", "screen", "live2d"}
 class DegradationManager:
     """系统降级管理。"""
 
-    def __init__(self, switch_manager, degradable: Optional[List[str]] = None):
+    def __init__(self, switch_manager, degradable: Optional[List[str]] = None,
+                 event_bus=None):
         self._switch_manager = switch_manager
         self._degradable = list(degradable or DEGRADABLE_ORCHESTRATORS)
         self._degraded = False
         self._saved: Dict[str, bool] = {}  # 降级前状态，恢复用
+        self._event_bus = event_bus  # 可选注入，发布 degradation:changed
+
+    def _notify(self) -> None:
+        """发布降级状态变更事件（触发 state:changed 快照推送）。"""
+        if self._event_bus is None:
+            return
+        try:
+            from src.shared.events import DEGRADATION_CHANGED
+            self._event_bus.publish(DEGRADATION_CHANGED, degraded=self._degraded,
+                                    degradable=list(self._degradable))
+        except Exception as e:
+            logger.warning("[DegradationManager] 发布事件失败: %s", e)
 
     @property
     def degraded(self) -> bool:
@@ -50,6 +63,7 @@ class DegradationManager:
                 count += 1
         self._degraded = True
         logger.warning("[DegradationManager] 已降级 %d 个调度官 (%s)", count, reason)
+        self._notify()
         return count
 
     def restore(self) -> int:
@@ -64,6 +78,7 @@ class DegradationManager:
         self._saved.clear()
         self._degraded = False
         logger.info("[DegradationManager] 已恢复 %d 个调度官", count)
+        self._notify()
         return count
 
     def snapshot(self) -> Dict:

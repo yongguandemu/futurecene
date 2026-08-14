@@ -105,6 +105,7 @@ class EventBus:
         self._fuse_cooldown = 5.0
         self._fuse_banned: Dict[str, float] = {}
         self._seq_counter = 0  # 全局单调序号（v1.2 新增）
+        self._thread_local = threading.local()  # handler 内事件元数据上下文
         self._initialized = True
         logger.info("[EventBus] 已初始化 (history_size=%d, fuse_threshold=%d)",
                     history_size, self._fuse_threshold)
@@ -176,21 +177,33 @@ class EventBus:
             record = EventRecord(event=event, data=data,
                                  handler_count=len(handlers),
                                  seq=self._seq_counter)
-        for handler in handlers:
-            try:
-                handler.callback(event=event, seq=record.seq, **data)
-                record.handler_results.append(f"{handler.name}: OK")
-            except Exception as e:
-                record.handler_results.append(f"{handler.name}: {e}")
-                logger.error("[EventBus] 处理器 %s 执行异常 (事件 %s): %s",
-                             handler.name, event, traceback.format_exc())
-            if handler.once:
-                self.unsubscribe(event, handler.callback)
+        # 线程局部上下文：handler 内可查询当前事件元数据（seq/timestamp），
+        # 支持嵌套发布（保存/恢复外层上下文，供 WS 广播取事件自身 seq）。
+        prev_meta = getattr(self._thread_local, "meta", None)
+        self._thread_local.meta = (record.seq, record.timestamp)
+        try:
+            for handler in handlers:
+                try:
+                    handler.callback(event=event, **data)
+                    record.handler_results.append(f"{handler.name}: OK")
+                except Exception as e:
+                    record.handler_results.append(f"{handler.name}: {e}")
+                    logger.error("[EventBus] 处理器 %s 执行异常 (事件 %s): %s",
+                                 handler.name, event, traceback.format_exc())
+                if handler.once:
+                    self.unsubscribe(event, handler.callback)
+        finally:
+            self._thread_local.meta = prev_meta
         if self._enable_history:
             with self._mutex:
                 self._history.append(record)
                 if len(self._history) > self._history_size:
                     self._history = self._history[-self._history_size:]
+
+    def current_event_meta(self) -> tuple:
+        """当前正在发布事件的 (seq, timestamp)；handler 内调用，无上下文返回 (0, 0.0)。"""
+        meta = getattr(self._thread_local, "meta", None)
+        return meta if meta else (0, 0.0)
 
     def publish_async(self, event: str, **data):
         """异步发布事件（在新线程执行，不阻塞调用方）"""

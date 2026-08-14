@@ -68,6 +68,22 @@ def test_degradation_restore():
     assert dm.degraded is False
 
 
+def test_degradation_publishes_change_event():
+    bus = EventBus()
+    bus.reset()
+    sm = SwitchManager(bus)
+    sm.auto_register("game")
+    dm = DegradationManager(sm, event_bus=bus)
+    events = []
+    bus.subscribe("degradation:changed", lambda **kw: events.append(kw))
+    dm.degrade(reason="test")
+    assert len(events) == 1
+    assert events[0]["degraded"] is True
+    dm.restore()
+    assert len(events) == 2
+    assert events[1]["degraded"] is False
+
+
 def test_check_publishes_only_on_flip():
     from src.shared.event_bus import EventBus
     bus = EventBus()

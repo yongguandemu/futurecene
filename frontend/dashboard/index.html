@@ -371,6 +371,7 @@ html, body { height: 100%; overflow: hidden; }
   });
 
   function getState() { return store.getState(); }
+  function dispatch(evt) { return store.dispatch(evt); }
 
   // ============ 渲染（全部由 store 快照驱动，去掉 5s 轮询） ============
   function systemStatus(wd) {
@@ -529,9 +530,12 @@ html, body { height: 100%; overflow: hidden; }
         }).then(function (r) { return r.json(); }).then(function (res) {
           if (!res.ok) { toast("开关操作失败: " + (res.error || ""), "error"); return; }
           if (res.command_id) {
-            // 记录命令状态，等待 state:changed 到达后 UI 才更新（不预测）
-            var cmds = getState().commands;
-            cmds[res.command_id] = { status: "sent", raw: name, error: null };
+            // 记录命令状态，等待 state:changed 到达后 UI 才更新（不预测）；
+            // 经 dispatch 提交以触发订阅，且不覆盖已前进的状态（running/success）
+            var cur = getState().commands[res.command_id];
+            if (!cur || cur.status === "failed") {
+              dispatch({ type: "commander:command_received", seq: 0, command_id: res.command_id });
+            }
           }
           // 不直接改 UI！等待 state:changed 事件
         }).catch(function () { toast("网络错误", "error"); })

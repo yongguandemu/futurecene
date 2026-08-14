@@ -132,7 +132,7 @@ def build_app_context():
     for name in registry.all():
         watchdog.register(name.name, name.health)
     watchdog.start()
-    degradation = DegradationManager(switch_manager)
+    degradation = DegradationManager(switch_manager, event_bus=event_bus)
     crash_reporter = CrashReporter()
     crash_reporter.install()
 

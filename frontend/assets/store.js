@@ -61,22 +61,24 @@
         return next;
       }
 
-      // 普通事件：仅当 seq > lastEventSeq 接受（事件日志）
-      if (seq <= next.seq) return state; // 过期事件丢弃，不产生新引用
-      next.seq = seq;
-      next.events = next.events.concat([{
-        type: type, seq: seq, ts: event.ts || Date.now(), data: event
-      }]).slice(-200);
-
-      // 命令状态机
+      // 命令状态机（不依赖 seq 门槛：本地 dispatch 的 command_received 也可生效）
       if (event.command_id) {
         const cmds = next.commands;
         if (type === 'commander:command_received') {
-          cmds[event.command_id] = { status: 'sent', raw: '', error: null };
+          const cur = cmds[event.command_id];
+          if (!cur || cur.status === 'failed' || cur.status === 'sent') {
+            cmds[event.command_id] = { status: 'sent', raw: event.raw || '', error: null };
+          }
+          // 已到 running/success 不覆盖（防 HTTP 响应晚于事件到达造成回退）
         } else if (type === 'commander:command_routed') {
-          if (cmds[event.command_id]) cmds[event.command_id].status = 'running';
+          if (cmds[event.command_id] && cmds[event.command_id].status !== 'success') {
+            cmds[event.command_id].status = 'running';
+          }
         } else if (type === 'commander:command_completed') {
-          if (cmds[event.command_id]) cmds[event.command_id].status = 'success';
+          if (cmds[event.command_id]) {
+            cmds[event.command_id].status = 'success';
+            cmds[event.command_id].error = null;
+          }
         } else if (type === 'commander:command_failed') {
           if (cmds[event.command_id]) {
             cmds[event.command_id].status = 'failed';
@@ -84,6 +86,16 @@
           }
         }
       }
+
+      // 普通事件：仅当 seq > lastEventSeq 接受（事件日志）；本地合成事件（seq=0）不记日志
+      if (seq <= next.seq) {
+        // 过期事件：若命令状态机有更新则保留（返回 next），否则丢弃（返回原 state）
+        return event.command_id ? next : state;
+      }
+      next.seq = seq;
+      next.events = next.events.concat([{
+        type: type, seq: seq, ts: event.ts || Date.now(), data: event
+      }]).slice(-200);
 
       // 会话/开关增量（快照之后的状态事件才应用；seq <= snapshotSeq 的状态已被快照包含）
       if (type === 'switch:changed' && event.name !== undefined && seq > next.snapshotSeq) {
@@ -114,10 +126,12 @@
     window.addEventListener('pagehide', function () {
       try {
         var s = store.getState();
+        // 不持久化游标（snapshotSeq/seq）：服务器可能重启，seq 会重置，
+        // 恢复旧游标会导致新快照被永久拒绝（状态卡死）。游标由首屏快照重置。
         sessionStorage.setItem(key, JSON.stringify({
           session: s.session, switches: s.switches, cost: s.cost,
           watchdog: s.watchdog, degradation: s.degradation,
-          snapshotSeq: s.snapshotSeq
+          orchestrators: s.orchestrators
         }));
       } catch (e) {}
     });
@@ -128,7 +142,8 @@
       var raw = sessionStorage.getItem(key);
       if (!raw) return false;
       var saved = JSON.parse(raw);
-      store.dispatch({ type: 'state:changed', snapshot: saved, version: saved.snapshotSeq });
+      // 只恢复展示字段，不恢复游标：version 置 0（快照游标仍 -1，可被任何新快照重置）
+      store.dispatch({ type: 'state:changed', snapshot: saved, version: 0 });
       return true;
     } catch (e) { return false; }
   }

@@ -54,10 +54,13 @@ verdict.deferred=True 表示"排队待发"，False 表示放行或无人回应�
 - 恢复：无状态持久化；互斥与队列状态由 turn_tracker 持有
 """
 import logging
+import random
+import time
 import uuid
 from dataclasses import dataclass
 from typing import List, Optional
 
+from src.orchestrators.collaboration.judge import RulesJudge, UrgencyResult
 from src.orchestrators.collaboration.rules import (
     ArbitrationContext, Rule, build_default_rules, make_rules_by_order,
 )
@@ -65,7 +68,7 @@ from src.orchestrators.collaboration.turn_tracker import TurnTracker
 from src.shared.decision_log import (
     OUTCOME_DEFERRED, OUTCOME_EXECUTED, OUTCOME_NO_ACTION, record_decision,
 )
-from src.shared.events import SPEECH_ARBITRATED
+from src.shared.events import COLLAB_JUDGE, SPEECH_ARBITRATED
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +86,8 @@ class SpeakerArbitrator:
                  profiles=None, lead_role: str = "yuki",
                  rules_order: Optional[List[str]] = None,
                  present_roles: Optional[set] = None,
-                 seed: Optional[int] = None):
+                 seed: Optional[int] = None,
+                 judge=None):
         self._event_bus = event_bus
         self._tt = turn_tracker or TurnTracker()
         self._profiles = profiles
@@ -93,6 +97,14 @@ class SpeakerArbitrator:
         self._present = (set(present_roles) if present_roles is not None else None)
         self._rules: List[Rule] = (make_rules_by_order(rules_order, seed=seed)
                                    if rules_order else build_default_rules(seed=seed))
+        self._rng = random.Random(seed)
+        # V3 判断器：默认 RulesJudge（规则链映射，行为与 V2 完全一致）；
+        # judge=LLMJudge 时由 LLM 产出紧迫度（提议），本类负责裁决（机制）。
+        self._judge = judge or RulesJudge(self._rules)
+
+    def set_judge(self, judge) -> None:
+        """运行时替换判断器（app 装配 llm judge 用）。"""
+        self._judge = judge
 
     def set_profiles(self, profiles) -> None:
         self._profiles = profiles
@@ -116,20 +128,22 @@ class SpeakerArbitrator:
                                  kind=kind, lead_role=self._lead_role,
                                  present_roles=present, profiles=self._profiles,
                                  turn_tracker=self._tt)
+        # V3：判断器产出紧迫度（LLM 提议 / 规则链映射），本类负责裁决（机制）。
+        start = time.perf_counter()
+        result: UrgencyResult = self._judge.judge(ctx)
+        latency = time.perf_counter() - start
+        self._publish_judge(result, latency)
+        hit = result.reason
         winner = None
-        hit = ""
-        for rule in self._rules:
-            verdict = rule.evaluate(ctx)
-            if verdict.role is not None:
-                winner = verdict.role
-                hit = verdict.reason
-                break
+        if not result.silent and result.urgencies:
+            winner = self._select_winner(result.urgencies)
         if winner is None:
-            # 决策日志：规则链全链未命中 = 显式的「决定不回应」（区别于没收到）
+            # 决策日志：判断器建议沉默 / 全链未命中 = 显式的「决定不回应」（区别于没收到）
             record_decision(source="arbitrator", outcome=OUTCOME_NO_ACTION,
                             reason_code="arbitrate_no_winner",
                             layer="L2", capability="collab:arbitrate",
-                            detail="规则链未命中，静默不回应: hit={}".format(hit),
+                            detail="判断器未产出发言者，静默不回应: hit={}, silent={}".format(
+                                hit, result.silent),
                             decision_id=request_id)
             return ArbitrationVerdict(None, hit, request_id, deferred=False)
 
@@ -151,6 +165,30 @@ class SpeakerArbitrator:
                         detail="{} 获发言权: {}".format(winner, hit),
                         decision_id=request_id)
         return ArbitrationVerdict(winner, hit, request_id, deferred=False)
+
+    def _select_winner(self, urgencies: dict) -> Optional[str]:
+        """机制裁决：紧迫度取最大者；平局 → 闲置最久者优先；仍平局 → seed 随机。"""
+        top = max(urgencies.values())
+        tied = [r for r, u in urgencies.items() if u == top]
+        if len(tied) == 1:
+            return tied[0]
+        idle = {r: self._tt.idle_seconds(r) for r in tied}
+        max_idle = max(idle.values())
+        idle_winners = [r for r, v in idle.items() if v == max_idle]
+        if len(idle_winners) == 1:
+            return idle_winners[0]
+        return self._rng.choice(sorted(idle_winners))
+
+    def _publish_judge(self, result: UrgencyResult, latency: float) -> None:
+        """发布 collab:judge 事件（成本可观测：来源 + 耗时 + 紧迫度）。"""
+        try:
+            self._event_bus.publish(
+                COLLAB_JUDGE,
+                urgencies=result.urgencies, silent=result.silent,
+                reason=result.reason, source=result.source,
+                latency=round(latency, 4))
+        except Exception as e:
+            logger.warning("[Arbitrator] 发布判断事件失败: %s", e)
 
     @staticmethod
     def _priority(kind: str, hit: str) -> int:

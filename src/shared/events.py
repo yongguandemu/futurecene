@@ -30,6 +30,7 @@ CHARACTER_PRESENCE_CHANGED = "character:presence_changed"  # 角色在场变更�
 SPEECH_ARBITRATED = "speech:arbitrated"                    # 仲裁结果（role/rule_hit/request_id）
 SPEECH_COMPLETED = "speech:completed"                      # 发言完成（role/text/audio_id，触发接话决策）
 COLLAB_UTTERANCE_REQUESTED = "collab:utterance_requested"  # 联动发言请求（role/kind/reason/ref_text）
+COLLAB_JUDGE = "collab:judge"                                # 仲裁判断完成（urgencies/silent/reason/source/latency，成本可观测）
 
 # ========== 开关域 ==========
 SWITCH_CHANGED = "switch:changed"                     # 开关状态变化
@@ -155,6 +156,7 @@ ALL_EVENTS = frozenset({
     SPEECH_ARBITRATED,
     SPEECH_COMPLETED,
     COLLAB_UTTERANCE_REQUESTED,
+    COLLAB_JUDGE,
     SWITCH_CHANGED,
     LLM_REQUESTED,
     LLM_RESPONDED,

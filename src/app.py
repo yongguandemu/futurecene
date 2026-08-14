@@ -206,6 +206,22 @@ def build_app_context():
         collab_cfg = config_loader.get("collaboration", {}) or {}
         for r in collab_profiles.all_roles():
             session.add_role(r)
+
+        # V3 判断器（judge: llm 时启用）：LLM 紧迫度裁决（提议-裁决单通道，护栏不变）。
+        # LLMJudge 自带预算（budget_per_min 次/分钟）与失败回退规则链，链路不中断。
+        judge_obj = None
+        if str(collab_cfg.get("judge", "rules")) == "llm":
+            from src.orchestrators.collaboration.judge import LLMJudge
+            judge_cfg = collab_cfg.get("llm_judge") or {}
+            llm_judge_orch = registry.get("llm")
+            if llm_judge_orch is not None:
+                judge_obj = LLMJudge(
+                    llm_judge_orch, collab_profiles,
+                    budget_per_min=int(judge_cfg.get("budget_per_min", 4)),
+                    rules_order=collab_cfg.get("rules_order"))
+                logger.info("[app] collaboration judge=llm（预算 %d 次/分钟，回退规则链）",
+                            judge_obj._budget)
+
         collaboration = CollaborationCoordinator(
             event_bus=event_bus,
             pipeline=pipeline,
@@ -217,6 +233,7 @@ def build_app_context():
             trigger_probability=float(collab_cfg.get("trigger_probability", 0.3)),
             trigger_global_cooldown=float(collab_cfg.get("trigger_global_cooldown", 20.0)),
             awareness_enabled=bool((collab_cfg.get("awareness") or {}).get("enabled", True)),
+            judge=judge_obj,
         )
         collaboration.start()
 

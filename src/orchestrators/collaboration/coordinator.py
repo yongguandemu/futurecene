@@ -168,7 +168,8 @@ class CollaborationCoordinator:
                  lead_role: str = "yuki", rules_order: Optional[List[str]] = None,
                  trigger_probability: float = 0.3,
                  trigger_global_cooldown: float = 20.0,
-                 awareness_enabled: bool = True, seed: Optional[int] = None):
+                 awareness_enabled: bool = True, seed: Optional[int] = None,
+                 judge=None):
         self._event_bus = event_bus
         self._pipeline = pipeline
         self._profiles = profiles
@@ -182,7 +183,8 @@ class CollaborationCoordinator:
                    (set(profiles.all_roles()) if profiles else {"yuki", "lilith"}))
         self._arb = SpeakerArbitrator(event_bus, self._tt, profiles=profiles,
                                       lead_role=lead_role, rules_order=rules_order,
-                                      present_roles=present, seed=seed)
+                                      present_roles=present, seed=seed,
+                                      judge=judge)
         self._triggers = CollabTriggers(
             probability=trigger_probability, global_cooldown=trigger_global_cooldown,
             present_roles=present,

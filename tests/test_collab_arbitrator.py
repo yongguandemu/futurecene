@@ -5,7 +5,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.shared.event_bus import EventBus
 from src.orchestrators.collaboration.arbitrator import SpeakerArbitrator
+from src.orchestrators.collaboration.judge import UrgencyResult
 from src.orchestrators.collaboration.turn_tracker import TurnTracker
+from src.shared.events import COLLAB_JUDGE
 
 
 class FakeProfiles:
@@ -101,3 +103,47 @@ def test_rules_order_seed_passthrough():
     vb = b.arbitrate("danmaku", "随便聊聊", "观众", kind="danmaku")
     assert va.role == vb.role
     assert va.role in {"yuki", "lilith"}
+
+
+def test_arbitrate_with_judge_llm_urgency():
+    """V3：LLM judge 模式取紧迫度最大者发言。"""
+    class FakeJudge:
+        def judge(self, ctx):
+            return UrgencyResult({"yuki": 0.2, "lilith": 0.9}, False, "llm", "llm")
+
+    bus = EventBus()
+    bus.reset()
+    arb = SpeakerArbitrator(bus, TurnTracker(), profiles=FakeProfiles(),
+                            judge=FakeJudge())
+    v = arb.arbitrate("danmaku", "随便聊聊", "观众", kind="danmaku")
+    assert v.role == "lilith"
+    assert v.rule_hit == "llm"
+
+
+def test_arbitrate_judge_silent_no_speech():
+    """V3：判断器建议沉默 → 不发言且不占用互斥。"""
+    class SilentJudge:
+        def judge(self, ctx):
+            return UrgencyResult({}, True, "silent", "llm")
+
+    bus = EventBus()
+    bus.reset()
+    tt = TurnTracker()
+    arb = SpeakerArbitrator(bus, tt, profiles=FakeProfiles(), judge=SilentJudge())
+    v = arb.arbitrate("danmaku", "随便聊聊", "观众", kind="danmaku")
+    assert v.role is None
+    assert tt.current_speaker is None           # 未占用互斥
+
+
+def test_arbitrate_publishes_judge_event():
+    """V3：每次仲裁发布 collab:judge（source + latency 可观测）。"""
+    bus = EventBus()
+    bus.reset()
+    seen = []
+    bus.subscribe(COLLAB_JUDGE, lambda event, **kw: seen.append(kw))
+    arb = SpeakerArbitrator(bus, TurnTracker(), profiles=FakeProfiles())
+    arb.arbitrate("danmaku", "@Lilith 你怎么看", "观众", kind="danmaku")
+    assert seen
+    assert seen[0]["source"] == "rules"         # 默认 RulesJudge
+    assert "latency" in seen[0]
+    assert "urgencies" in seen[0]

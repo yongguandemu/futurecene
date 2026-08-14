@@ -113,6 +113,9 @@ collaboration:
   rules_order: [mention, intent, continuation, relevance, balance, cooldown, random]
   balance:
     max_run: 2          # 防垄断：同角色连续发言超过该值且无更强信号时换人
+  judge: rules          # 发言权判断器：rules（规则链，默认）| llm（LLM 紧迫度，V3）
+  llm_judge:
+    budget_per_min: 4   # LLM 判断预算：每分钟最多调用次数；超预算自动回退规则链
   lead_role: yuki
   trigger_probability: 0.3
   trigger_global_cooldown: 20.0

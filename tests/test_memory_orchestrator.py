@@ -74,3 +74,19 @@ def test_unknown_capability(tmp_path):
     orch, _ = _make(tmp_path)
     r = asyncio.run(orch.handle({"capability": "memory:unknown", "payload": {}}))
     assert r["ok"] is False
+
+
+def test_memory_bucket_by_character():
+    orch = MemoryOrchestrator(EventBus())
+    orch.start()
+    asyncio.run(orch.handle({"capability": "memory:store",
+                             "payload": {"content": "Yuki 的话题", "role": "assistant",
+                                         "session_id": "default", "character_id": "yuki"}}))
+    asyncio.run(orch.handle({"capability": "memory:store",
+                             "payload": {"content": "Lilith 的话题", "role": "assistant",
+                                         "session_id": "default", "character_id": "lilith"}}))
+    r1 = asyncio.run(orch.handle({"capability": "memory:get_history",
+                                  "payload": {"session_id": "default",
+                                              "character_id": "yuki", "limit": 20}}))
+    texts = [e["content"] for e in r1["data"]["history"]]
+    assert "Yuki 的话题" in texts and "Lilith 的话题" not in texts

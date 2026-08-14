@@ -67,12 +67,18 @@ class MemoryOrchestrator:
 
     # ---------- 内部实现 ----------
 
+    @staticmethod
+    def _bucket(session_id: str, character_id: str = "") -> str:
+        """记忆分桶：character_id 存在时按角色隔离。"""
+        return f"{session_id}:{character_id}" if character_id else session_id
+
     def _store(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         content = payload.get("content", "")
         if not content:
             return {"ok": False, "data": {}, "error": "content 必填"}
         session_id = payload.get("session_id", "default")
-        memory_id = self._short.append(session_id, payload.get("role", "user"), content)
+        bucket = self._bucket(session_id, payload.get("character_id", ""))
+        memory_id = self._short.append(bucket, payload.get("role", "user"), content)
         self._event_bus.publish(MEMORY_STORED, memory_id=memory_id, session_id=session_id)
         return {"ok": True, "data": {"memory_id": memory_id}, "error": None}
 
@@ -80,8 +86,9 @@ class MemoryOrchestrator:
         query = payload.get("query", "")
         k = int(payload.get("k", 5))
         session_id = payload.get("session_id", "")
+        bucket = self._bucket(session_id, payload.get("character_id", ""))
         mode = payload.get("mode", "hybrid")  # keyword / vector / hybrid（默认）
-        short_entries = self._short.get_history(session_id) if session_id else self._short.all_entries()
+        short_entries = self._short.get_history(bucket) if session_id else self._short.all_entries()
         long_entries = self._long.retrieve(query, k) if query else []
         if query:
             if mode == "vector":
@@ -103,18 +110,20 @@ class MemoryOrchestrator:
     def _consolidate(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """短期 → 长期固化（规格书 5.5：由指挥官触发）。"""
         session_id = payload.get("session_id", "")
-        entries = self._short.get_history(session_id) if session_id else self._short.all_entries()
+        bucket = self._bucket(session_id, payload.get("character_id", ""))
+        entries = self._short.get_history(bucket) if session_id else self._short.all_entries()
         count = 0
         for entry in entries:
             self._long.store(content=entry["content"], role=entry["role"],
                              session_id=entry["session_id"])
             count += 1
-        self._short.clear(session_id or None)
+        self._short.clear(bucket or None)
         self._event_bus.publish(MEMORY_CONSOLIDATED, count=count)
         return {"ok": True, "data": {"consolidated": count}, "error": None}
 
     def _get_history(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         session_id = payload.get("session_id", "default")
+        bucket = self._bucket(session_id, payload.get("character_id", ""))
         limit = int(payload.get("limit", 20))
-        history = self._short.get_history(session_id, limit)
+        history = self._short.get_history(bucket, limit)
         return {"ok": True, "data": {"history": history}, "error": None}

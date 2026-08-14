@@ -111,3 +111,31 @@ def test_target_randomization_reproducible():
     assert seq1 == seq2                       # 同 seed 同结果（确定性）
     assert seq1 == ["aoi", "aoi", "mio", "mio", "aoi", "aoi"]  # 固定断言
     assert len(set(seq1)) > 1                 # 随机化生效，非恒取字典序第一
+
+
+def test_question_ending_triggers_direct_banter():
+    """结构增强：发言以问号结尾 → 即使概率为 0 也接话（提问必须被接）。"""
+    tr = CollabTriggers(probability=0.0, global_cooldown=0.0,
+                        present_roles={"yuki", "lilith"}, seed=42)
+    props = tr.evaluate("yuki", "你们觉得这个故事怎么样？")
+    assert props and props[0]["role"] == "lilith" and props[0]["kind"] == "banter"
+
+
+def test_story_marker_boosts_probability():
+    """结构增强：故事/玩笑标记 → 有效概率提升为 max(配置, 0.6)。"""
+    # 静态函数确定性断言
+    assert CollabTriggers._structural_effective_probability(0.0, "那我给大家讲个故事吧") == 0.6
+    assert CollabTriggers._structural_effective_probability(0.8, "那我给大家讲个故事吧") == 0.8
+    assert CollabTriggers._structural_effective_probability(0.3, "今天天气不错") == 0.3
+    assert CollabTriggers._structural_effective_probability(0.0, "你们觉得呢？") == 1.0
+    # 集成路径：0.2 概率 + 结构增强至 0.6，seed=1 首抽 0.134 < 0.6 → 必然触发
+    tr = CollabTriggers(probability=0.2, global_cooldown=0.0,
+                        present_roles={"yuki", "lilith"}, seed=1)
+    assert tr.evaluate("yuki", "那我给大家讲个故事吧")
+
+
+def test_plain_speech_keeps_probability():
+    """结构增强：无结构信号时保持配置概率（0 概率仍不接话）。"""
+    tr = CollabTriggers(probability=0.0, global_cooldown=0.0,
+                        present_roles={"yuki", "lilith"}, seed=0)
+    assert tr.evaluate("yuki", "今天天气不错") == []

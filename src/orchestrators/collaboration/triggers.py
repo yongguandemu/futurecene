@@ -13,6 +13,9 @@ import threading
 import time
 from typing import Dict, List, Optional
 
+_QUESTION_SUFFIXES = ("？", "?")
+_STORY_MARKERS = ("故事", "笑话", "讲个", "哈哈", "好玩", "真的假的")
+
 
 class CollabTriggers:
     def __init__(self, probability: float = 0.3, global_cooldown: float = 20.0,
@@ -41,11 +44,24 @@ class CollabTriggers:
             if present_roles is not None:
                 self._present = set(present_roles)
 
+    @staticmethod
+    def _structural_effective_probability(probability: float, text: str) -> float:
+        """结构驱动概率（V2，对话结构信号）：提问必须被接（1.0）；
+        故事/玩笑倾向被接（0.6）；否则用配置概率。"""
+        t = (text or "").strip()
+        if t.endswith(_QUESTION_SUFFIXES):
+            return 1.0
+        if any(m in t for m in _STORY_MARKERS):
+            return max(probability, 0.6)
+        return probability
+
     def evaluate(self, speaker: str, text: str) -> List[Dict[str, str]]:
         """发言完成后调用；返回接话提案列表（通常 0 或 1 条）。
 
         冷却语义：global_cooldown 是“成功产出”后的静默期——仅当本次实际产出提案时才
         刷新冷却起点；概率未命中（未产出提案）不消耗冷却额度，可立即继续触发。
+        结构增强：发言以问号结尾 → 接话概率提升为 1.0（提问必须被接）；
+        含故事/玩笑标记 → 提升为 max(配置, 0.6)（倾向被接）。
         目标选择：在场且非 speaker 的候选中用注入的 _rng 随机选取（同 seed 同结果）。
         冷却检查与状态写入由 _lock 保护（与 turn_tracker 风格一致），避免并发竞态。
         """
@@ -53,7 +69,8 @@ class CollabTriggers:
         with self._lock:
             if now - self._last_trigger_at < self._cooldown:
                 return []
-            if self._probability <= 0 or self._rng.random() > self._probability:
+            effective = self._structural_effective_probability(self._probability, text)
+            if effective <= 0 or self._rng.random() > effective:
                 return []
             others = [r for r in sorted(self._present) if r != speaker]
             if not others:

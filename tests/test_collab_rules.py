@@ -5,7 +5,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.orchestrators.collaboration.rules import (
     ArbitrationContext, MentionRule, IntentRule, RelevanceRule,
-    CooldownRule, RandomRule, make_rules_by_order,
+    CooldownRule, RandomRule, ContinuationRule, BalanceRule, make_rules_by_order,
 )
 
 
@@ -15,6 +15,20 @@ class FakeTT:
 
     def idle_seconds(self, role):
         return self.last.get(role, 0.0)
+
+
+class FakeTTWithHistory:
+    """带话轮历史的 turn_tracker 桩（结构规则数据源）。"""
+
+    def __init__(self, history=None, last=None):
+        self._history = history or []
+        self.last = last or {"yuki": 100.0, "lilith": 50.0}
+
+    def idle_seconds(self, role):
+        return self.last.get(role, 0.0)
+
+    def turn_history(self, limit=10):
+        return list(self._history[-limit:])
 
 
 class FakeProfiles:
@@ -152,3 +166,56 @@ def test_make_rules_by_order_seed_and_unknown():
     assert [r.name for r in rules] == ["random"]
     assert rules[0].evaluate(_ctx("随便聊聊")).role == \
         RandomRule(seed=7).evaluate(_ctx("随便聊聊")).role
+
+
+def test_continuation_rule_follows_last_speaker():
+    tt = FakeTTWithHistory(history=[{"role": "yuki", "kind": "speech",
+                                     "text": "今天给大家讲一个月亮邮差的故事", "ts": 1.0}])
+    ctx = ArbitrationContext(text="这个故事真好听，再来一个", user_name="观众", source="danmaku",
+                             kind="danmaku", lead_role="yuki",
+                             present_roles={"yuki", "lilith"},
+                             profiles=FakeProfiles(), turn_tracker=tt)
+    v = ContinuationRule().evaluate(ctx)
+    assert v.role == "yuki" and v.reason == "continuation:yuki"
+
+
+def test_continuation_rule_no_signal_returns_none():
+    tt = FakeTTWithHistory(history=[{"role": "lilith", "kind": "speech",
+                                     "text": "哼，今天直播人气不错", "ts": 1.0}])
+    ctx = ArbitrationContext(text="今天天气不错", user_name="观众", source="danmaku",
+                             kind="danmaku", lead_role="yuki",
+                             present_roles={"yuki", "lilith"},
+                             profiles=FakeProfiles(), turn_tracker=tt)
+    v = ContinuationRule().evaluate(ctx)
+    assert v.role is None
+
+
+def test_continuation_rule_empty_history_safe():
+    ctx = ArbitrationContext(text="嗯嗯", user_name="观众", source="danmaku",
+                             kind="danmaku", lead_role="yuki",
+                             present_roles={"yuki", "lilith"},
+                             profiles=FakeProfiles(), turn_tracker=FakeTTWithHistory())
+    v = ContinuationRule().evaluate(ctx)
+    assert v.role is None
+
+
+def test_balance_rule_prefers_other_after_monopoly():
+    tt = FakeTTWithHistory(history=[
+        {"role": "yuki", "kind": "speech", "text": "故事一", "ts": 1.0},
+        {"role": "yuki", "kind": "speech", "text": "故事二", "ts": 2.0},
+    ])
+    ctx = ArbitrationContext(text="随便聊聊", user_name="观众", source="danmaku",
+                             kind="danmaku", lead_role="yuki",
+                             present_roles={"yuki", "lilith"},
+                             profiles=FakeProfiles(), turn_tracker=tt)
+    v = BalanceRule(max_run=2).evaluate(ctx)
+    assert v.role == "lilith" and v.reason == "balance:lilith"
+
+
+def test_balance_rule_not_fire_below_run_threshold():
+    tt = FakeTTWithHistory(history=[{"role": "yuki", "kind": "speech", "text": "故事一", "ts": 1.0}])
+    ctx = ArbitrationContext(text="随便聊聊", user_name="观众", source="danmaku",
+                             kind="danmaku", lead_role="yuki",
+                             present_roles={"yuki", "lilith"},
+                             profiles=FakeProfiles(), turn_tracker=tt)
+    assert BalanceRule(max_run=2).evaluate(ctx).role is None

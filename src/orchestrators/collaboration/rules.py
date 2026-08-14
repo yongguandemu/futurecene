@@ -182,15 +182,85 @@ class RandomRule(Rule):
         return RuleVerdict(choice, 0.5, f"random:{choice}")
 
 
-def build_default_rules(seed: Optional[int] = None) -> List[Rule]:
-    return [MentionRule(), IntentRule(), RelevanceRule(),
+# 结构信号（相邻对，调研 V2 落地）：观众回应上一位发言者的响应标记词
+_RESPONSE_MARKERS = ("谢谢", "好听", "好看", "笑死", "哈哈", "666", "牛",
+                     "对", "确实", "嗯嗯", "然后呢", "再来一个", "真的假的")
+
+
+class ContinuationRule(Rule):
+    """延续规则：观众在回应上一位发言者（响应词或话题重叠）→ 由上一位发言者继续。
+
+    对话结构信号（相邻对）的确定性实现：响应标记词或与上轮文本的关键词重叠。
+    无话轮历史或历史缺失时安全返回 None（不误判）。
+    """
+    name = "continuation"
+
+    def evaluate(self, ctx):
+        history_fn = getattr(ctx.turn_tracker, "turn_history", None)
+        if not callable(history_fn):
+            return RuleVerdict(None, 0.0, "no-history")
+        history = history_fn(limit=3) or []
+        last = None
+        for entry in reversed(history):
+            if entry.get("text"):
+                last = entry
+                break
+        if last is None or last.get("role") not in ctx.present_roles:
+            return RuleVerdict(None, 0.0, "no-last-turn")
+        text = ctx.text
+        if any(marker in text for marker in _RESPONSE_MARKERS):
+            return RuleVerdict(last["role"], 0.9, f"continuation:{last['role']}")
+        last_text = last.get("text") or ""
+        overlap = {w for w in text if len(w) >= 2 and w in last_text}
+        if overlap:
+            return RuleVerdict(last["role"], 0.7, f"continuation:{last['role']}")
+        return RuleVerdict(None, 0.0, "no-continuation-signal")
+
+
+class BalanceRule(Rule):
+    """防垄断规则：同一位角色连续发言超过 max_run 次且无更强信号时，换另一位角色。"""
+    name = "balance"
+
+    def __init__(self, max_run: int = 2):
+        self._max_run = int(max_run)
+
+    def evaluate(self, ctx):
+        history_fn = getattr(ctx.turn_tracker, "turn_history", None)
+        if not callable(history_fn):
+            return RuleVerdict(None, 0.0, "no-history")
+        history = history_fn(limit=self._max_run + 1) or []
+        run = 0
+        last_role = None
+        for entry in reversed(history):
+            if not entry.get("role"):
+                continue
+            if last_role is None:
+                last_role = entry["role"]
+                run = 1
+            elif entry["role"] == last_role:
+                run += 1
+            else:
+                break
+        if run >= self._max_run:
+            others = [r for r in sorted(ctx.present_roles) if r != last_role]
+            if others:
+                return RuleVerdict(others[0], 0.6, f"balance:{others[0]}")
+        return RuleVerdict(None, 0.0, "no-monopoly")
+
+
+def build_default_rules(seed: Optional[int] = None,
+                        balance_max_run: int = 2) -> List[Rule]:
+    return [MentionRule(), IntentRule(), ContinuationRule(),
+            RelevanceRule(), BalanceRule(max_run=balance_max_run),
             CooldownRule(), RandomRule(seed=seed)]
 
 
-def make_rules_by_order(names: List[str], seed: Optional[int] = None) -> List[Rule]:
+def make_rules_by_order(names: List[str], seed: Optional[int] = None,
+                        balance_max_run: int = 2) -> List[Rule]:
     """按名称顺序组装规则；seed 透传给 RandomRule（同 seed 重复调用行为一致），
     未知名记 warning 并跳过。"""
-    pool = {r.name: r for r in build_default_rules(seed=seed)}
+    pool = {r.name: r for r in build_default_rules(seed=seed,
+                                                   balance_max_run=balance_max_run)}
     rules = []
     for n in names:
         if n in pool:

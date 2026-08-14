@@ -107,7 +107,12 @@ intelligence:
 # - awareness: 感知彼此——为发言角色注入对方最近发言（max_partner_lines 条）。
 collaboration:
   enabled: false
-  rules_order: [mention, intent, relevance, cooldown, random]
+  # 规则链（V2 加入结构规则）：mention(@指定) > intent(系统意图→lead) >
+  # continuation(观众回应上一位发言者) > relevance(话题相关) >
+  # balance(防垄断换人) > cooldown(闲置最久) > random(平局兜底)
+  rules_order: [mention, intent, continuation, relevance, balance, cooldown, random]
+  balance:
+    max_run: 2          # 防垄断：同角色连续发言超过该值且无更强信号时换人
   lead_role: yuki
   trigger_probability: 0.3
   trigger_global_cooldown: 20.0

@@ -47,7 +47,9 @@ def create_app(context: Optional[Dict] = None) -> Flask:
     app.register_blueprint(command_route.bp)
     app.register_blueprint(switch_route.bp)
 
-    ws_route.init_ws(app, context.get("event_bus"))
+    ws_route.init_ws(app, context.get("event_bus"),
+                     seq_provider=lambda: context.get("event_bus").current_seq()
+                     if context.get("event_bus") else 0)
 
     # /api/metrics：成本 + 看门狗快照（P5）
     @app.get("/api/metrics")

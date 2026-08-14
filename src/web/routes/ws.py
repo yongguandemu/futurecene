@@ -5,13 +5,13 @@
 
 # 模块内容清单（8 项契约）
 1. 模块身份标识：web.routes · ws · WS /ws/events（事件广播）+ /ws/tts_audio（音频流）
-2. 配置契约：init_ws(app, event_bus) 由应用工厂注入 event_bus；TTS_CACHE_DIR=PROJECT_ROOT/data/cache/tts
+2. 配置契约：init_ws(app, event_bus, seq_provider=None) 由应用工厂注入 event_bus 与可选的 seq 提供器；TTS_CACHE_DIR=PROJECT_ROOT/data/cache/tts
 3. 输入契约：/ws/events 客户端消息忽略；/ws/tts_audio 客户端 JSON {"audio_id": ...} 或裸字符串
-4. 输出契约：/ws/events 广播 {"type": event, ...} JSON（default=str 兜底）；/ws/tts_audio 返回音频字节或 {"error": ...} JSON
+4. 输出契约：/ws/events 广播 {"type": event, "seq": int, ...} JSON（default=str 兜底）；/ws/tts_audio 返回音频字节或 {"error": ...} JSON
 5. 依赖声明：json、logging、flask_sock（Sock）、src.shared.config_loader
 6. 错误定义：audio_id 缺失/音频不存在返回 {"error": ...}；事件序列化失败记日志并跳过；连接关闭/心跳超时静默退出
-7. 生命周期方法：init_ws(app, event_bus)（注册路由 + 订阅 EventBus 全事件广播）
-8. 领域状态说明：模块级 _clients 集合维护在线 WS 客户端；TTS_CACHE_DIR 音频缓存目录
+7. 生命周期方法：init_ws(app, event_bus, seq_provider=None)（注册路由 + 订阅 EventBus 全事件广播）
+8. 领域状态说明：模块级 _clients 集合维护在线 WS 客户端；_seq_provider 事件序号提供器；TTS_CACHE_DIR 音频缓存目录
 """
 import json
 import logging
@@ -26,6 +26,7 @@ TTS_CACHE_DIR = PROJECT_ROOT / "data" / "cache" / "tts"
 
 sock = Sock()
 _clients = set()
+_seq_provider = None
 
 
 def _extract_audio_id(msg) -> str:
@@ -39,8 +40,13 @@ def _extract_audio_id(msg) -> str:
     return ""
 
 
-def init_ws(app, event_bus) -> None:
-    """注册 WS 路由并订阅 EventBus 广播。"""
+def init_ws(app, event_bus, seq_provider=None) -> None:
+    """注册 WS 路由并订阅 EventBus 广播。
+
+    seq_provider: 可选 Callable[[], int]，返回 EventBus 当前 seq。
+    """
+    global _seq_provider
+    _seq_provider = seq_provider
     sock.init_app(app)
 
     @sock.route("/ws/events")
@@ -78,12 +84,13 @@ def init_ws(app, event_bus) -> None:
 
 
 def _broadcast(event: str, **data) -> None:
-    """EventBus 回调：广播事件给所有 WS 客户端。"""
+    """EventBus 回调：广播事件给所有 WS 客户端（消息携带 seq）。"""
     if not _clients:
         return
     try:
-        message = json.dumps({"type": event, **data}, ensure_ascii=False,
-                             default=str)
+        seq = _seq_provider() if _seq_provider else 0
+        message = json.dumps({"type": event, "seq": seq, **data},
+                             ensure_ascii=False, default=str)
     except (TypeError, ValueError) as e:
         logger.warning("[WS] 事件序列化失败: %s", e)
         return

@@ -3,10 +3,12 @@
 能力条目（单实现，全部由 orchestrator.handle 分发）：
 - game:vn_start / game:vn_stop / game:vn_state
 - game:mc_start / game:mc_stop / game:commentary
+- game:op_start / game:op_stop / game:op_state / game:op_plan / game:op_command
+  （通用游戏操作：使能启停 / 状态查询 / 指令规划 / 单条指令执行）
 实际执行经 bind(orchestrator.handle) 绑定，resolve 返回已绑定的真实调度函数。
 
 # 模块内容清单（8 项契约）
-1. 模块身份标识：game 调度官 · registry · 能力注册表（game:vn_start 等 6 项）
+1. 模块身份标识：game 调度官 · registry · 能力注册表（game:vn_*/mc_*/commentary/op_* 共 11 项）
 2. 配置契约：无（能力表 HANDLERS 为静态定义）
 3. 输入契约：capabilities()/resolve(capability, engine)/bind(dispatch)/has(capability)
 4. 输出契约：capabilities 返回 List[str]；resolve 返回已绑定调度函数；bind 无返回；has 返回 bool
@@ -26,6 +28,11 @@ HANDLERS = {
     "game:mc_start": [object],
     "game:mc_stop": [object],
     "game:commentary": [object],
+    "game:op_start": [object],         # 通用游戏操作：开启 AI 自动操作
+    "game:op_stop": [object],          # 通用游戏操作：关闭 AI 自动操作
+    "game:op_state": [object],         # 通用游戏操作：操作循环状态
+    "game:op_plan": [object],          # 通用游戏操作：指令→操作计划
+    "game:op_command": [object],       # 通用游戏操作：单条指令执行
 }
 
 _repo = CapabilityRegistry(HANDLERS)

@@ -30,6 +30,7 @@ class CharacterProfile:
     keywords: Dict[str, List[str]] = field(default_factory=dict)
     voice_id: str = ""
     catchphrases: List[Dict] = field(default_factory=list)
+    behavior_rules: Dict = field(default_factory=dict)
 
 
 class CharacterProfileLoader:
@@ -50,9 +51,25 @@ class CharacterProfileLoader:
         return self._yaml, self._json
 
     def all_roles(self) -> List[str]:
+        """全部可用角色：目录枚举，排除停用角色（character.yaml enabled: false，如改名遗留 lumi）。"""
         if not self._dir.exists():
             return []
-        return sorted(p.name for p in self._dir.iterdir() if p.is_dir())
+        roles = []
+        for p in self._dir.iterdir():
+            if not p.is_dir():
+                continue
+            cy = p / "character.yaml"
+            enabled = True
+            if cy.exists():
+                try:
+                    yaml, _ = self._imports()
+                    data = yaml.safe_load(cy.read_text(encoding="utf-8")) or {}
+                    enabled = data.get("enabled", True) is not False
+                except Exception:
+                    pass
+            if enabled:
+                roles.append(p.name)
+        return sorted(roles)
 
     def load(self, role: str) -> Optional[CharacterProfile]:
         if role in self._cache:
@@ -91,6 +108,12 @@ class CharacterProfileLoader:
                                         .get("phrases", []))
             except Exception:
                 pass
+        br = role_dir / "behavior_rules.yaml"
+        if br.exists():
+            try:
+                profile.behavior_rules = yaml.safe_load(br.read_text(encoding="utf-8")) or {}
+            except Exception as e:
+                logger.warning("[CharacterProfile] %s behavior_rules.yaml 解析失败: %s", role, e)
         self._cache[role] = profile
         return profile
 

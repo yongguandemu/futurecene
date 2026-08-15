@@ -5,13 +5,18 @@
 # ============================================================
 
 llm:
+  # 引擎路由（ADR-006 成本控制）：payload.engine 决定降级链
+  # - "fast"（日常对话/弹幕/主动话题）：zhipu(GLM-4.7-FlashX) 优先 → openai 兜底
+  # - "pro"/缺省（复杂 Agent：游戏操作规划等）：openai(DeepSeek V4 Pro) 优先 → zhipu 兜底
   openai:
-    api_key: ${{ env.OPENAI_API_KEY }}      # DeepSeek V4 Pro（OpenAI 兼容主引擎）
+    api_key: ${{ env.OPENAI_API_KEY }}      # DeepSeek V4 Pro（pro 引擎主力，Agent 复杂任务）
     base_url: ${{ env.OPENAI_BASE_URL }}    # https://api.deepseek.com/v1
     model: ${{ env.OPENAI_MODEL }}          # deepseek-v4-pro
   zhipu:
-    api_key: ${{ env.ZHIPU_API_KEY }}       # 智谱 API Key（降级备选）
-    model: ${{ env.ZHIPU_MODEL }}           # glm-4.7-flashx（免费快速兜底，与 .env 保持一致）
+    api_key: ${{ env.ZHIPU_API_KEY }}       # 智谱 API Key（fast 引擎主力，日常对话/弹幕互动）
+    model: ${{ env.ZHIPU_MODEL }}           # glm-4.7-flashx（轻量高速版，付费保吞吐，与 .env 保持一致）
+  active_dialogue:
+    enabled: false        # 主动对话总开关（默认开）。开着会定时调 LLM+TTS，消耗积分，测试期建议关闭。
 
 tts:
   # 本机播放：TTS 合成后直接在本机扬声器播放（无前端浏览器/直播测试台场景）。
@@ -72,6 +77,20 @@ stream:
   height: 720
   fps: 12
   bitrate: "800k"
+  # ---- 推流目标：二选一 ----
+  # A. 手动推流码（推荐：无直播间/无 Cookie 也能推）：开播前从 B站开播页复制
+  #    RTMP 地址 + 推流码填入，start 时优先使用；留空则走 B 自动刷新。
+  #    rtmp_key 为敏感信息，建议用环境变量 STREAM_RTMP_KEY（config_loader 支持 ${{ env.XXX }}）。
+  rtmp_server: ""            # 如 rtmp://live-send.bilivideo.com/live-bvc
+  rtmp_key: ""               # 推流码（敏感，勿提交；可用 ${{ env.STREAM_RTMP_KEY }}）
+  # B. 自动刷新：room_id + identity_code + deploy/bilibili_cookie.json（B站 Cookie）
+  #    → startLive API 自动获取最新推流地址（需已开通直播间）。
+  # ---- 内容源（source_type） ----
+  # live2d：无头渲染 live2d_stream 页面逐帧推流（默认，Live2D 实时互动）
+  # video ：预设视频循环推流（挂机内容，source_path 指向视频文件）
+  # image ：静态图循环推流（封面/待机画面，source_path 指向图片）
+  source_type: live2d
+  source_path: ""            # video/image 模式的源文件（如 data/clips/loop.mp4）
 
 experience:
   enabled: true              # 是否随启动启用经验学习调度官
@@ -80,6 +99,22 @@ experience:
   min_confidence: 0.7        # 经验复用阈值
   query_top_k: 3             # 检索返回数
   max_entries: 5000          # 经验上限
+
+# ---------- 世界书（P0 迁移 470 条 + 自动进化） ----------
+world_book:
+  evolve:
+    enabled: true            # 订阅弹幕/礼物事件自动进化世界书（装配层启动）
+    topic_threshold: 10      # 话题出现次数 ≥ 该值 → 生成观众话题条目
+    viewer_gift_value: 100   # 观众累计礼物价值（金瓜子）≥ 该值 → 重要观众条目
+    viewer_msg_count: 20     # 观众发言数 ≥ 该值 → 常驻观众条目
+
+# ---------- 日程排期（P0 补迁：到点触发动作，经指挥官分发） ----------
+schedule:
+  enabled: true              # 调度总开关（关闭则检查线程不启动）
+  data_file: data/schedule.json   # 运行时增删的排期落盘位置
+  # 预置排期：cron 为 5 段表达式（分 时 日 月 周），支持 * / */n / a-b / a,b,c / 数字
+  # action 为要触发的能力名（如 stream:start / live2d:expression），payload 随事件透传
+  jobs: []
 
 # ---------- P1 直播间智能（精细子模块）配置 ----------
 intelligence:
@@ -96,6 +131,19 @@ intelligence:
   speech_max_size: 200            # 发言队列容量
   speech_timeout: 120.0           # 发言超时（秒）
   context_cache_ttl: 0.5          # 情境快照缓存 TTL（秒）
+
+# ---------- 游戏实况（P3 通用游戏操作）配置 ----------
+game:
+  operation:
+    poll_interval: 2.0           # 感知轮询间隔（秒）
+    advance_wait: 4.0            # 对白停顿后推进等待（秒）
+    max_failures: 5              # 连续失败自动停止上限
+    fuse_limit: 3                # 连续无响应熔断阈值
+    fuse_pause: 60               # 熔断暂停时长（秒）
+    post_action_cooldown: 3.0    # 操作后冷却（秒）
+    dedup_window: 8              # 同指令去重窗口（秒）
+    retry_limit: 2               # 操作失败/无变化重试上限
+    image_diff_threshold: 0.02   # 图像差分变化判定阈值（像素占比）
 
 # ---------- 多角色协作（P2 装配，P1 先备好角色映射） ----------
 # 初值说明：
@@ -140,7 +188,7 @@ roles:
       shake: Hiyori_m05
       idle: Hiyori_m01
   - name: lilith
-    live2d_model: 小恶魔
+    live2d_model: Haru
     restrict_breath: false
     position: {x: 0.73, y: 1.0}
     scale: 0.42

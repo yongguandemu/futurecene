@@ -79,6 +79,16 @@ SAFETY_FLAGGED = "safety:flagged"                     # 内容被标记（需人
 GAME_VN_STATE_CHANGED = "game:vn_state_changed"       # VN 画面状态变化
 GAME_MC_STATE_CHANGED = "game:mc_state_changed"       # MC 状态变化
 GAME_COMMENTARY_REQUESTED = "game:commentary_requested"  # 请求生成解说
+GAME_OP_STATE_CHANGED = "game:op_state_changed"       # 通用游戏操作循环状态变化（started/stopped/stopped_by_failures）
+GAME_OP_CYCLE = "game:op_cycle"                       # 通用游戏操作单轮循环完成
+GAME_OP_OPERATION = "game:op_operation"               # 通用游戏操作下发（action/params/ok）
+GAME_OP_FEEDBACK = "game:op_feedback"                 # 通用游戏操作反馈（action/ok/scene_changed）
+
+# ========== 屏幕控制域（虚拟光标） ==========
+SCREEN_CURSOR_STATE = "screen:cursor_state"           # 虚拟光标状态推送（role/x/y/visible/active/label/trail/ripples）
+SCREEN_CURSOR_ACTION = "screen:cursor_action"         # 虚拟光标动作（输入层广播：action/x/y/label/role）
+SCREEN_CURSOR_ACTIVE_ROLE = "screen:cursor_active_role"  # 活跃角色切换（active_role/previous_role）
+SCREEN_CURSOR_VISIBILITY = "screen:cursor_visibility"    # 光标可见性（role/visible/fade_duration）
 
 # ========== 前端域 ==========
 FRONTEND_STATUS_UPDATE = "frontend:status_update"     # 系统状态推送（供总控台）
@@ -93,6 +103,7 @@ STATE_CHANGED = "state:changed"                       # 状态快照推送（含
 WATCHDOG_CHANGED = "watchdog:changed"                 # 看门狗健康状态翻转（ok↔degraded↔down）
 COST_MILESTONE = "cost:milestone"                     # 成本累计每满 1.00 元发布（触发 state:changed）
 DEGRADATION_CHANGED = "degradation:changed"           # 降级管理器变更（degrade/restore）
+SCHEDULE_FIRED = "schedule:fired"                     # 日程排期到点触发（动作由指挥官分发执行）
 
 # ========== QQ 平台域（P2） ==========
 QQ_CONNECTED = "qq:connected"                         # QQ 连接建立
@@ -187,6 +198,14 @@ ALL_EVENTS = frozenset({
     GAME_VN_STATE_CHANGED,
     GAME_MC_STATE_CHANGED,
     GAME_COMMENTARY_REQUESTED,
+    GAME_OP_STATE_CHANGED,
+    GAME_OP_CYCLE,
+    GAME_OP_OPERATION,
+    GAME_OP_FEEDBACK,
+    SCREEN_CURSOR_STATE,
+    SCREEN_CURSOR_ACTION,
+    SCREEN_CURSOR_ACTIVE_ROLE,
+    SCREEN_CURSOR_VISIBILITY,
     FRONTEND_STATUS_UPDATE,
     FRONTEND_SUBTITLE_UPDATE,
     AUDIO_SEGMENT_READY,
@@ -223,4 +242,5 @@ ALL_EVENTS = frozenset({
     HEAT_UPDATED,
     ACTIVE_DIALOGUE,
     DECISION_LOGGED,
+    SCHEDULE_FIRED,
 })

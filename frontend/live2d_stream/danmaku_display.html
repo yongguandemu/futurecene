@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>弹幕显示源（OBS 透明）</title>
+<script src="/frontend/assets/store.js"></script>
+<script src="/frontend/assets/state_sync.js"></script>
+<style>
+  /* OBS 浏览器源：仅渲染弹幕/字幕叠加层，背景透明，供 OBS 独立组合 */
+  html, body {
+    margin: 0; padding: 0;
+    background: transparent !important;
+    overflow: hidden;
+    width: 100%; height: 100vh;
+    font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+  }
+  #danmu-panel {
+    position: fixed; right: 3%; top: 18%; width: 22%; max-width: 340px; max-height: 55vh;
+    overflow-y: auto; z-index: 3; background: rgba(255,255,255,0.75);
+    border-radius: 10px; padding: 10px; display: flex; flex-direction: column-reverse;
+    font-size: 13px; backdrop-filter: blur(4px);
+    border: 1px solid rgba(200,160,220,0.4);
+  }
+  #danmu-panel::-webkit-scrollbar { width: 4px; }
+  #danmu-panel::-webkit-scrollbar-thumb { background: rgba(180,140,200,0.3); border-radius: 2px; }
+  #danmu-list .dm-item { color: #333; margin: 4px 0; word-break: break-all; line-height: 1.5; }
+  #danmu-list .dm-item .dm-user { color: #c06090; margin-right: 6px; font-weight: 600; }
+  #danmu-list .dm-item.ai { color: #4060b0; }
+  #danmu-list .dm-item.filtered { color: #c44; text-decoration: line-through; }
+</style>
+</head>
+<body>
+  <div id="danmu-panel">
+    <div id="danmu-list"></div>
+  </div>
+
+  <script>
+  (function () {
+    "use strict";
+    var danmuList = document.getElementById("danmu-list");
+    var MAX_DANMU = 50;
+    function escHtml(s) {
+      return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+        return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+      });
+    }
+    function pushDanmu(user, text, cls) {
+      var el = document.createElement("div");
+      el.className = "dm-item" + (cls ? " " + cls : "");
+      el.innerHTML = '<span class="dm-user">' + escHtml(user) + '</span>' + escHtml(text);
+      danmuList.appendChild(el);
+      while (danmuList.children.length > MAX_DANMU) {
+        danmuList.removeChild(danmuList.firstChild);
+      }
+    }
+    if (!window.FSStore || !window.FSStateSync) return;
+    var store = window.FSStore.createStore(window.FSStore.makeReducer(), window.FSStore.initialState());
+    var sync = new window.FSStateSync(store);
+    sync.init();
+    store.subscribe("danmaku:", function (state, event) {
+      if (event.type === "danmaku:received") pushDanmu(event.user_name || "观众", event.content || "", "");
+    });
+    store.subscribe("audience:", function (state, event) {
+      if (event.type === "audience:filtered") pushDanmu("拦截", event.content || "", "filtered");
+    });
+    store.subscribe("frontend:", function (state, event) {
+      if (event.type === "frontend:subtitle_update") {
+        pushDanmu("AI · " + (event.role || "yuki"), event.text || "", "ai");
+      }
+    });
+  })();
+  </script>
+</body>
+</html>

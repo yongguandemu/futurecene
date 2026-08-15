@@ -61,6 +61,7 @@ class ActiveDialogue:
         self._lock = threading.Lock()
         self._generator: Optional[Callable[[], Any]] = None
         self._role_generator: Optional[Callable[[str], Any]] = None
+        self._role_provider: Optional[Callable[[], str]] = None
         self._last_active_time = 0.0
         self._last_user_activity = time.time()
         self._active_count = 0
@@ -82,6 +83,10 @@ class ActiveDialogue:
         并存——role 为空时保持既有 set_generator 行为（单角色兼容）。
         """
         self._role_generator = fn
+
+    def set_role_provider(self, fn: Callable[[], str]):
+        """注入当前角色获取函数（fn() -> role_str），供 _timer_loop 自动传 role。"""
+        self._role_provider = fn
 
     def set_event_bus(self, event_bus):
         self._bus = event_bus
@@ -176,7 +181,8 @@ class ActiveDialogue:
             if not self._running:
                 break
             try:
-                self.tick()
+                role = self._role_provider() if self._role_provider else ""
+                self.tick(role=role)
             except Exception as e:
                 logger.error("[ActiveDialogue] tick 异常: %s", e)
 

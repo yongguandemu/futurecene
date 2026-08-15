@@ -22,3 +22,23 @@ venv/
 .idea/
 .vscode/
 *.log
+
+# ===== 浏览器调试缓存（无头 Live2D 探测残留） =====
+_edge_profile*/
+_extensions*/
+User Data*/
+
+# ===== 调试残留（根目录探测/检查脚本与截图） =====
+_*.py
+_*.js
+_*.mjs
+_*.png
+screenshot*.png
+live2d_dom.html
+~$*
+
+# ===== 前端依赖 / 本地产物 =====
+node_modules/
+*.pptx
+角色资源储存/
+

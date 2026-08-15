@@ -80,10 +80,23 @@ class ExperienceOrchestrator:
         return registry.capabilities()
 
     def start(self, adapter=None) -> None:
-        if self._brain is None:
-            self._adapter = adapter or self._adapter
-            self._brain = ExperienceLearnBrain(self._adapter, self._config,
-                                               event_bus=self._event_bus)
+        if self._brain is not None:
+            # 测试注入的 brain：直接启用
+            self._brain.set_bus(self._event_bus)
+            self._brain.start()
+            self._started = True
+            return
+        self._adapter = adapter or self._adapter
+        if self._adapter is None:
+            # D3 模块傻：无游戏 adapter 时看不到任何游戏状态，决策循环只会空转
+            # （反复尝试 move_to 等动作全部 push_failed + 刷爆决策日志）。
+            # 不自动启动，待经 experience:start(adapter) 显式拉起。
+            logger.info("[ExperienceOrchestrator] 无游戏 adapter，跳过决策循环"
+                        "（可经 experience:start 显式启动）")
+            self._started = True
+            return
+        self._brain = ExperienceLearnBrain(self._adapter, self._config,
+                                           event_bus=self._event_bus)
         self._brain.set_bus(self._event_bus)
         self._brain.start()
         self._started = True

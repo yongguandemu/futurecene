@@ -46,6 +46,7 @@ from src.orchestrators.live_intelligence_orchestrator import LiveIntelligenceOrc
 from src.orchestrators.llm_orchestrator import LLMOrchestrator  # noqa: E402
 from src.orchestrators.memory_orchestrator import MemoryOrchestrator  # noqa: E402
 from src.orchestrators.safety_orchestrator import SafetyOrchestrator  # noqa: E402
+from src.orchestrators.schedule_orchestrator import ScheduleOrchestrator  # noqa: E402
 from src.orchestrators.screen_control_orchestrator import ScreenControlOrchestrator  # noqa: E402
 from src.orchestrators.stream_orchestrator import StreamOrchestrator  # noqa: E402
 from src.orchestrators.stream_orchestrator.headless_streamer import HeadlessStreamer  # noqa: E402
@@ -54,7 +55,7 @@ from src.orchestrators.tts_orchestrator import TTSOrchestrator  # noqa: E402
 from src.shared.config_loader import ConfigLoader, load  # noqa: E402
 from src.shared.crash_reporter import CrashReporter  # noqa: E402
 from src.shared.decision_log import attach as attach_decision_log  # noqa: E402
-from src.shared.events import DANMAKU_RECEIVED  # noqa: E402
+from src.shared.events import ACTIVE_DIALOGUE, DANMAKU_RECEIVED  # noqa: E402
 from src.shared.decision_log import clear_log, log_stats, recent_entries  # noqa: E402
 from src.shared.event_bus import EventBus  # noqa: E402
 from src.shared.logger import get  # noqa: E402
@@ -68,8 +69,9 @@ def _role_topic(role: str, profiles, session, collaboration, llm_orch) -> dict:
     """角色化主动话题生成（Task 18 冷场自发闲聊）。
 
     fn(role) -> {text, mood}（ActiveDialogue.set_role_generator 契约）：
-    prompt 携带角色人设（profile.system_prompt）+ 对方最近发言（collaboration
-    snapshot.recent_turns）+ 在场搭档（session.present_roles），调 LLM _chat 生成；
+    prompt 携带角色人设（profile.system_prompt）+ 话题偏好（behavior_rules）
+    + 对方最近发言（collaboration snapshot.recent_turns）+ 在场搭档
+    （session.present_roles），调 LLM _chat 生成；
     任何失败回退 DEFAULT_TOPICS 话题池随机，保证冷场闲聊不中断。
     """
     import random
@@ -77,6 +79,24 @@ def _role_topic(role: str, profiles, session, collaboration, llm_orch) -> dict:
     try:
         p = profiles.load(role) if profiles is not None else None
         persona = getattr(p, "system_prompt", "") if p else ""
+        # 世界书设定块（与 danmaku_pipeline._system_prompt 对齐）：主动对话同样注入
+        # 世界设定，避免冷场闲聊脱离世界观。
+        from src.shared.world_book import get_world_book
+        wb_block = get_world_book().system_prompt_block(role)
+        if wb_block:
+            persona = (persona + "\n\n" + wb_block).strip() if persona else wb_block
+        # 话题偏好（behavior_rules.yaml → preferred_topics / avoid_topics）
+        topic_hint = ""
+        if p is not None:
+            rules = getattr(p, "behavior_rules", {}) or {}
+            preferred = rules.get("rules", {}).get("preferred_topics") or []
+            avoid = rules.get("rules", {}).get("avoid_topics") or []
+            parts = []
+            if preferred:
+                parts.append("擅长话题：" + "、".join(str(t) for t in preferred))
+            if avoid:
+                parts.append("回避话题：" + "、".join(str(t) for t in avoid))
+            topic_hint = "；".join(parts) + "。" if parts else ""
         partner = ""
         if collaboration is not None:
             turns = collaboration.snapshot().get("recent_turns", []) or []
@@ -87,8 +107,8 @@ def _role_topic(role: str, profiles, session, collaboration, llm_orch) -> dict:
         companions = "在场搭档：" + "、".join(r for r in present if r != role)
         prompt = (
             "直播间有些冷场，请以{role}的身份主动发起一个轻松闲聊话题。"
-            "{companions}{partner}回复控制在两句话以内，不要使用表情符号。"
-        ).format(role=role, companions=companions, partner=partner)
+            "{topic_hint}{companions}{partner}回复控制在两句话以内，不要使用表情符号。"
+        ).format(role=role, topic_hint=topic_hint, companions=companions, partner=partner)
         resp = llm_orch._chat({"text": prompt, "system_prompt": persona, "history": []})
         text = ((resp or {}).get("data") or {}).get("reply", "") or ""
         if text and text.strip():
@@ -114,7 +134,9 @@ def build_app_context():
     p2_platform_cfg = config_loader.get("platform") or {}
     p2_stream_cfg = config_loader.get("stream") or {}
     p2_exp_cfg = config_loader.get("experience") or {}
+    p2_game_cfg = config_loader.get("game") or {}
     p1_intel_cfg = config_loader.get("intelligence") or {}
+    schedule_cfg = config_loader.get("schedule") or {}
     streamer = HeadlessStreamer(page_url=p2_stream_cfg.get("page_url",
                                                            "http://127.0.0.1:8000/live2d-stream.html?paused=0"),
                                 width=p2_stream_cfg.get("width", 1280),
@@ -123,6 +145,13 @@ def build_app_context():
                                 bitrate=p2_stream_cfg.get("bitrate", "800k"))
     refresher = StreamCodeRefresher(room_id=p2_stream_cfg.get("room_id", 0),
                                     identity_code=p2_stream_cfg.get("identity_code", ""))
+    # screen 先实例化，绑定到 game（通用游戏操作经 screen 命令调用感知/操作）
+    screen_orch = ScreenControlOrchestrator(
+        event_bus=event_bus,
+        vision_api_key=os.environ.get("GLMVISION_API_KEY", ""))
+    game_orch = GameOrchestrator(event_bus=event_bus,
+                                 screen_orchestrator=screen_orch,
+                                 config=p2_game_cfg)
     orchestrators = [
         LLMOrchestrator(event_bus=event_bus, config_loader=config_loader),
         TTSOrchestrator(event_bus=event_bus, config_loader=config_loader),
@@ -130,11 +159,8 @@ def build_app_context():
         BilibiliOrchestrator(event_bus=event_bus, config_loader=config_loader),
         MemoryOrchestrator(event_bus=event_bus),
         SafetyOrchestrator(event_bus=event_bus),
-        ScreenControlOrchestrator(
-            event_bus=event_bus,
-            vision_api_key=os.environ.get("GLMVISION_API_KEY", "")),
-        GameOrchestrator(event_bus=event_bus,
-                         screen_orchestrator=None),
+        screen_orch,
+        game_orch,
         # ---------- P2 扩展调度官 ----------
         MusicOrchestrator(event_bus=event_bus, config=p2_music_cfg),
         PlatformOrchestrator(event_bus=event_bus, config=p2_platform_cfg),
@@ -143,9 +169,21 @@ def build_app_context():
         ExperienceOrchestrator(event_bus=event_bus, config=p2_exp_cfg),
         # ---------- P1 直播间智能（精细子模块） ----------
         LiveIntelligenceOrchestrator(event_bus=event_bus, config=p1_intel_cfg),
+        # ---------- 日程调度（P0 补迁：排期到点触发动作） ----------
+        ScheduleOrchestrator(event_bus=event_bus, config=schedule_cfg),
     ]
     for orch in orchestrators:
         registry.register(orch)
+
+    # 通用游戏操作联动接线：LLM 规划（llm:chat）+ 经验学习（experience:feedback）
+    game_orch.set_llm_orchestrator(registry.get("llm"))
+    game_orch.set_experience_orchestrator(registry.get("experience"))
+
+    # 世界书自动进化：订阅弹幕/礼物事件 → 生成观众话题/重要观众/常驻观众条目（D3：装配层启动）
+    from src.shared.world_book import get_world_book
+    get_world_book().start_evolving(
+        event_bus,
+        config_loader.get("world_book", {}).get("evolve", {}) or {})
 
     # ---------- 指挥官 ----------
     from src.commander.character_profile import CharacterProfileLoader
@@ -160,14 +198,35 @@ def build_app_context():
     tts_orch = registry.get("tts")
     safety_orch = registry.get("safety")
     memory_orch = registry.get("memory")
+    from src.commander.tool_registry import ToolRegistry
+    tool_registry = ToolRegistry()  # LLM 工具注册表（内置世界书查询/系统状态）
     pipeline = DanmakuPipeline(event_bus=event_bus, llm_orchestrator=llm_orch,
                                tts_orchestrator=tts_orch,
                                safety_orchestrator=safety_orch,
                                memory_orchestrator=memory_orch,
                                switch_manager=switch_manager,
                                session=session,
-                               profile_loader=profile_loader)
+                               profile_loader=profile_loader,
+                               tool_registry=tool_registry)
     pipeline.start()
+
+    # ---------- 日程触发分发（P0 补迁）：schedule:fired → 指挥官命令分发 ----------
+    # 排期到点时 ScheduleOrchestrator 只发事件；此处由装配层订阅并把动作
+    # 投递给指挥官，经正常命令分发链（command_router → 调度官 handle）执行。
+    from src.shared.events import SCHEDULE_FIRED
+
+    def _on_schedule_fired(event, action="", payload=None, **kw):
+        import asyncio
+        from src.commander.intent_parser import Command
+        try:
+            asyncio.run(command_router.dispatch(
+                Command(capability=action, payload=payload or {},
+                        source="schedule", session_id=session.session_id)))
+        except Exception as e:
+            logger.warning("[app] 排期动作分发失败 %s: %s", action, e)
+
+    event_bus.subscribe(SCHEDULE_FIRED, _on_schedule_fired)
+    logger.info("[app] 已订阅 schedule:fired 排期分发")
 
     # ---------- 本机 TTS 播放（直播测试台 · 无前端浏览器场景） ----------
     # tts.local_playback=true 时订阅 tts:audio_ready，把合成音频播放到本机扬声器；
@@ -180,13 +239,21 @@ def build_app_context():
         local_tts.start()
 
     # ---------- 冷场主动对话（直播测试台 · 主动模式） ----------
-    # LLM 调度官内部持有 ActiveDialogue（构造时创建）；此处绑定 EventBus 并启动，
-    # 使冷场自发闲聊真正生效（此前仅 COLLAB_ENABLED 时注入角色生成器，引擎不启动）。
+    # LLM 调度官内部持有 ActiveDialogue（构造时创建）。遵循"模块傻"原则：
+    # 模块不自启动——此处仅绑定 EventBus 与 role_provider，是否随服务启动由
+    # config.llm.active_dialogue.enabled 决定（enabled=true 时配置授权启动）；
+    # 禁用时（enabled=false/缺省）不启动，仅能经显式指令
+    # POST /api/command llm:active_dialogue {action:start} 才运行。
     active_dialogue = getattr(llm_orch, "_active", None)
     if active_dialogue is not None:
         active_dialogue.set_event_bus(event_bus)
-        active_dialogue.start()
-        logger.info("[app] ActiveDialogue 主动对话已启动")
+        active_dialogue.set_role_provider(lambda: session.role)
+        llm_ad_cfg = (config_loader.get("llm") or {}).get("active_dialogue", {}) or {}
+        if llm_ad_cfg.get("enabled"):
+            active_dialogue.start()
+            logger.info("[app] ActiveDialogue 按配置 enabled=true 随服务启动（role_provider=session.role）")
+        else:
+            logger.info("[app] ActiveDialogue 配置禁用，不随服务启动（可经 llm:active_dialogue start 显式开启）")
 
     # ---------- Live2D 模型装载（直播测试台：使后端模型状态非空） ----------
     # 此前 live2d:load 仅 demo_danmaku.py 调用，生产装配零调用导致后端
@@ -250,6 +317,8 @@ def build_app_context():
         # 多角色模式下弹幕由协调器仲裁分发（谁回应由规则链决定），
         # 管线不再自行按当前角色处理（避免一条弹幕双重发言）
         event_bus.unsubscribe(DANMAKU_RECEIVED, pipeline._on_danmaku)
+        # 主动对话也由协调器处理，避免双重执行（管线说一遍 + 协调器再说一遍）
+        event_bus.unsubscribe(ACTIVE_DIALOGUE, pipeline._on_active_dialogue)
 
         # ---------- 冷场自发闲聊（Task 18）：active_dialogue 角色化 ----------
         # LLM 调度官内部持有 ActiveDialogue 实例（llm_orchestrator._active，构造时已注入
@@ -262,6 +331,12 @@ def build_app_context():
             active_dialogue.set_role_generator(
                 lambda role: _role_topic(role, collab_profiles, session, collaboration,
                                          llm_orch))
+    else:
+        # 非协作模式：同样注入 _role_generator，使主动对话带角色人设（修复 system_prompt 为空）
+        if active_dialogue is not None:
+            active_dialogue.set_role_generator(
+                lambda role: _role_topic(role, profile_loader, session, None, llm_orch))
+            logger.info("[app] ActiveDialogue 角色化话题生成器已注入（单角色模式）")
 
     # ---------- 运维：成本 / 熔断 / 看门狗 / 降级 / 崩溃 ----------
     cost_tracker = CostTracker(event_bus=event_bus)
@@ -325,6 +400,7 @@ def build_app_context():
         "profiles": collab_profiles if collaboration else None,
         "decision_log": {"recent": recent_entries, "stats": log_stats,
                          "clear": clear_log},
+        "world_book": get_world_book(),
     }
     return create_app(context), event_bus
 

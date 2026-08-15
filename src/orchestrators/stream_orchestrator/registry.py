@@ -3,10 +3,11 @@
 能力条目（单实现，全部由 orchestrator.handle 分发）：
 - stream:start / stop / state / fetch_code / launch_app / app_terminate /
   app_list / app_register
+- obs:sources / obs:open  （OBS 直播浏览器源查询/打开）
 实际执行经 bind(orchestrator.handle) 绑定，resolve 返回已绑定的真实调度函数。
 
 # 模块内容清单（8 项契约）
-1. 模块身份标识：stream · registry · 能力注册表（stream:start/stop/state/fetch_code/launch_app/app_terminate/app_list/app_register）
+1. 模块身份标识：stream · registry · 能力注册表（stream:start/stop/state/fetch_code/launch_app/app_terminate/app_list/app_register + obs:sources/obs:open）
 2. 配置契约：无
 3. 输入契约：capability 名称 + engine 参数
 4. 输出契约：capabilities() 清单 / resolve() 调度函数 / has() 布尔
@@ -28,6 +29,8 @@ HANDLERS = {
     "stream:app_terminate": [object],
     "stream:app_list": [object],
     "stream:app_register": [object],
+    "obs:sources": [object],           # OBS 浏览器源清单查询
+    "obs:open": [object],              # 打开指定 OBS 浏览器源
 }
 
 _repo = CapabilityRegistry(HANDLERS)

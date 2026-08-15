@@ -60,6 +60,40 @@ def test_keywords_fallback_without_keywords_field():
         assert "冷静" in kw["personality"] and "冷静" not in kw["topics"]
 
 
+def test_load_behavior_rules():
+    """behavior_rules.yaml 被正确加载到 profile.behavior_rules。"""
+    with tempfile.TemporaryDirectory() as d:
+        _make_profiles(Path(d))
+        r = Path(d) / "profiles" / "yuki"
+        (r / "behavior_rules.yaml").write_text(
+            "rules:\n"
+            "  preferred_topics:\n"
+            "    - 日常聊天\n"
+            "    - 动漫游戏\n"
+            "  avoid_topics:\n"
+            "    - 政治敏感\n"
+            "  live:\n"
+            "    auto_greet_new_viewers: true\n",
+            encoding="utf-8")
+        loader = CharacterProfileLoader(profiles_dir=Path(d) / "profiles")
+        p = loader.load("yuki")
+        assert p.behavior_rules
+        rules = p.behavior_rules.get("rules", {})
+        assert "日常聊天" in rules.get("preferred_topics", [])
+        assert "动漫游戏" in rules.get("preferred_topics", [])
+        assert "政治敏感" in rules.get("avoid_topics", [])
+        assert rules.get("live", {}).get("auto_greet_new_viewers") is True
+
+
+def test_behavior_rules_empty_when_missing():
+    """behavior_rules.yaml 不存在时 behavior_rules 为空 dict。"""
+    with tempfile.TemporaryDirectory() as d:
+        _make_profiles(Path(d))
+        loader = CharacterProfileLoader(profiles_dir=Path(d) / "profiles")
+        p = loader.load("yuki")
+        assert p.behavior_rules == {}
+
+
 def test_load_caches_same_object_and_ignores_file_change():
     with tempfile.TemporaryDirectory() as d:
         _make_profiles(Path(d))

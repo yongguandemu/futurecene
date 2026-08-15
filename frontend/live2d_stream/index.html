@@ -6,15 +6,21 @@
 <script src="/frontend/assets/store.js"></script>
 <script src="/frontend/assets/state_sync.js"></script>
 <style>
-  /* OBS 浏览器源：透明背景 */
+  /* 默认：杂谈直播间背景；?transparent=1 时透明（OBS 浏览器源） */
   html, body {
     margin: 0;
     padding: 0;
-    background: transparent !important;
+    background: #1a1a2e;
     overflow: hidden;
     width: 100%;
     height: 100vh;
     font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+  }
+  body.has-bg {
+    background: url('/assets/streaming/zatsudan_bg.png') center center / cover no-repeat #1a1a2e;
+  }
+  body.transparent-mode {
+    background: transparent !important;
   }
   #canvas-holder {
     position: fixed;
@@ -24,6 +30,7 @@
     width: 560px;
     height: 720px;
     pointer-events: none;
+    z-index: 2;
   }
   #hint {
     position: fixed;
@@ -35,6 +42,7 @@
     border-radius: 8px;
     padding: 6px 12px;
     display: none;
+    z-index: 4;
   }
   /* M2 说话高亮：仲裁放行（speech:arbitrated）→ 模型容器加聚光边框；发言完成移除 */
   #canvas-holder.actor-speaking {
@@ -44,41 +52,36 @@
                 inset 0 0 20px rgba(255, 200, 130, 0.10);
   }
 
-  /* ===== 直播测试台：背景装饰层（assets/streaming 素材） ===== */
-  #stream-deco { position: fixed; inset: 0; pointer-events: none; z-index: 1; }
-  #stream-deco img { position: absolute; }
-  .deco-banner-top { top: 0; left: 0; width: 100%; }
-  .deco-bar-bottom { bottom: 0; left: 0; width: 100%; }
-  .deco-panel-danmu { right: 16px; top: 16px; width: 340px; opacity: 0.45; }
-
-  /* ===== 直播测试台：弹幕显示框 ===== */
+  /* ===== 弹幕显示框：叠加在背景右侧 COMMENT 区域 ===== */
   #danmu-panel {
-    position: fixed; right: 16px; top: 60px; width: 320px; max-height: 40vh;
-    overflow-y: auto; z-index: 2; background: rgba(0, 0, 0, 0.35);
-    border-radius: 8px; padding: 8px; display: flex; flex-direction: column-reverse;
-    font-size: 13px;
+    position: fixed; right: 3%; top: 18%; width: 22%; max-width: 340px; max-height: 55vh;
+    overflow-y: auto; z-index: 3; background: rgba(255, 255, 255, 0.75);
+    border-radius: 10px; padding: 10px; display: flex; flex-direction: column-reverse;
+    font-size: 13px; backdrop-filter: blur(4px);
+    border: 1px solid rgba(200, 160, 220, 0.4);
   }
   #danmu-panel::-webkit-scrollbar { width: 4px; }
-  #danmu-panel::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.2); border-radius: 2px; }
-  #danmu-list .dm-item { color: #fff; margin: 4px 0; word-break: break-all; line-height: 1.5; }
-  #danmu-list .dm-item .dm-user { color: #ffd666; margin-right: 6px; font-weight: 600; }
-  #danmu-list .dm-item.ai { color: #9be8ff; }
-  #danmu-list .dm-item.filtered { color: #ff6b6b; text-decoration: line-through; }
+  #danmu-panel::-webkit-scrollbar-thumb { background: rgba(180, 140, 200, 0.3); border-radius: 2px; }
+  #danmu-list .dm-item { color: #333; margin: 4px 0; word-break: break-all; line-height: 1.5; }
+  #danmu-list .dm-item .dm-user { color: #c06090; margin-right: 6px; font-weight: 600; }
+  #danmu-list .dm-item.ai { color: #4060b0; }
+  #danmu-list .dm-item.filtered { color: #c44; text-decoration: line-through; }
 
-  /* ===== 直播测试台：弹幕输入框 ===== */
+  /* ===== 弹幕输入框：叠加在底部控制栏 ===== */
   #danmu-input-bar {
-    position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
-    display: flex; gap: 8px; z-index: 3; width: 480px; max-width: 90vw;
+    position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%);
+    display: flex; gap: 8px; z-index: 3; width: 420px; max-width: 60vw;
   }
   #danmu-input-bar input {
-    flex: 1; padding: 10px 14px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.25);
-    background: rgba(0, 0, 0, 0.5); color: #fff; font-size: 14px; outline: none;
+    flex: 1; padding: 8px 14px; border-radius: 6px; border: 1px solid rgba(180, 160, 200, 0.4);
+    background: rgba(255, 255, 255, 0.8); color: #333; font-size: 13px; outline: none;
+    backdrop-filter: blur(4px);
   }
-  #danmu-input-bar input::placeholder { color: rgba(255, 255, 255, 0.5); }
+  #danmu-input-bar input::placeholder { color: rgba(100, 80, 120, 0.5); }
   #danmuSend {
-    padding: 10px 18px; border-radius: 8px; border: none; cursor: pointer;
-    background: linear-gradient(135deg, #00d4aa, #2563eb); color: #fff; font-weight: 600;
-    font-size: 14px;
+    padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer;
+    background: linear-gradient(135deg, #d87093, #9b6dd9); color: #fff; font-weight: 600;
+    font-size: 13px;
   }
   #danmuSend:hover { filter: brightness(1.1); }
 </style>
@@ -87,14 +90,7 @@
   <div id="hint">模型加载中…</div>
   <div id="canvas-holder"></div>
 
-  <!-- 直播测试台：直播间背景装饰层（assets/streaming 素材） -->
-  <div id="stream-deco">
-    <img src="/assets/streaming/banner_top.png" alt="" class="deco-banner-top">
-    <img src="/assets/streaming/bar_bottom.png" alt="" class="deco-bar-bottom">
-    <img src="/assets/streaming/panel_danmu.png" alt="" class="deco-panel-danmu">
-  </div>
-
-  <!-- 直播测试台：弹幕显示框（测试用） -->
+  <!-- 弹幕显示框（测试用） -->
   <div id="danmu-panel">
     <div id="danmu-list"></div>
   </div>
@@ -106,335 +102,40 @@
   </div>
 
   <!-- 本地 vendor：PixiJS + Live2D Cubism（离线可用，规格书 12.1；/frontend/ 由 Flask 静态路由服务） -->
+  <!-- process shim：pixi-live2d-display 内部引用 process.env.NODE_ENV（Node 全局），浏览器无此对象会抛
+       ReferenceError 导致 Live2DModel 未定义、模型不渲染；此处先注入生产环境 shim。 -->
+  <script>window.process = window.process || { env: { NODE_ENV: "production" } };</script>
+  <!-- 加载顺序：Cubism2 runtime(live2d.min.js) → Cubism4 core(live2dcubismcore.min.js) → PixiJS → pixi-live2d-display。
+       pixi-live2d-display 初始化会同时检查 Live2D(Cubism2) 与 Live2DCubismCore(Cubism4)，缺任一即抛
+       "Could not find Cubism 2 runtime" 且模型不渲染（.moc3 模型也依赖 Cubism2 runtime 存在）。 -->
+  <script src="/frontend/vendor/live2d.min.js"></script>
+  <script src="/frontend/vendor/live2dcubismcore.min.js"></script>
+  <!-- Memory shim：当前 live2dcubismcore.min.js 缺 Live2DCubismCore.Memory 命名空间，
+       pixi-live2d-display 的 CubismFramework.initialize() 依赖 Memory.initializeAmountOfMemory，
+       缺失会导致"最先加载的模型"（如 yuki/Hiyori）触发 Cubism4 初始化失败、模型不渲染；
+       Haru 因排在后面走 isStarted 捷径绕过不报错。Memory.initializeAmountOfMemory 仅预分配内存，
+       moc3 加载走 _csm/Moc 原生函数不依赖它，no-op 兼容即可（Haru 全量渲染已验证）。 -->
+  <script>
+    if (typeof Live2DCubismCore !== 'undefined' && !Live2DCubismCore.Memory) {
+      Live2DCubismCore.Memory = { initializeAmountOfMemory: function () {} };
+    }
+  </script>
   <script src="/frontend/vendor/pixi.min.js"></script>
   <script src="/frontend/vendor/pixi-live2d-display.min.js"></script>
-  <script src="/frontend/vendor/live2dcubismcore.min.js"></script>
+  <!-- 连续动画驱动库：30Hz 参数注入，接管呼吸/视线/情绪混合/说话微动/空闲行为 -->
+  <script src="/frontend/assets/live2d_driver.js"></script>
+  <!-- 角色加载与事件驱动核心（与 /live2d/live2d.html 复用；本页同时含弹幕显示/输入，供本地组合预览） -->
+  <script src="/frontend/live2d_stream/live2d_actor.js"></script>
 
 <script>
+// 背景模式：默认显示杂谈背景；?transparent=1 为 OBS 透明模式
 (function () {
-  "use strict";
-
-  // 角色 → 模型配置（与 config.yaml roles 对应；无后端时前端兜底）
-  var ROLES = window.__ROLES || [
-    { name: "yuki", model: "Hiyori", restrictBreath: true, idleSilent: "Hiyori_m03",
-      x: 0.27, scale: 0.42,
-      expressionMap: {}, motionMap: { wave: "Hiyori_m01", nod: "Hiyori_m02",
-        shake: "Hiyori_m05", idle: "Hiyori_m01" } },
-    { name: "lilith", model: "小恶魔", restrictBreath: false, idleSilent: "idle",
-      x: 0.73, scale: 0.42,
-      expressionMap: { 开心: "唱歌", 难过: "流泪", 惊讶: "头发", 害羞: "嘟嘴", 生气: "脸黑", 平静: "头发" },
-      motionMap: { wave: "wave", nod: "nod", shake: "shake", idle: "idle" } }
-  ];
-  var hint = document.getElementById("hint");
-  var app = null;
-  var actors = {};   // role -> { model, motion, state: 'silent'|'talking', timer, lastAudio }
-
-  function showHint(text) { hint.textContent = text; hint.style.display = "block"; }
-
-  function mappedMotion(role, semantic) {
-    var cfg = ROLES.find(function (r) { return r.name === role; });
-    if (!cfg || !cfg.motionMap) return null;
-    return cfg.motionMap[semantic] || cfg.motionMap.idle || null;
+  var params = new URLSearchParams(location.search);
+  if (params.get('transparent') === '1') {
+    document.body.classList.add('transparent-mode');
+  } else {
+    document.body.classList.add('has-bg');
   }
-
-  function mappedExpression(role, semantic) {
-    var cfg = ROLES.find(function (r) { return r.name === role; });
-    if (!cfg || !cfg.expressionMap) return null;
-    return cfg.expressionMap[semantic] || null;   // 映射缺失 → null（跳过）
-  }
-
-  function playMotion(role, motion) {
-    var a = actors[role];
-    if (!a || !a.model || !motion) return;
-    try { a.model.motion(motion); } catch (e) { /* ignore */ }
-  }
-
-  function setState(role, state) {
-    var a = actors[role];
-    if (!a) return;
-    if (a.state === state) return;
-    a.state = state;
-    var cfg = ROLES.find(function (r) { return r.name === role; });
-    if (state === "silent") {
-      var idle = cfg && cfg.restrictBreath
-        ? (cfg.idleSilent || (cfg.motionMap && cfg.motionMap.idle))
-        : (cfg && cfg.motionMap ? cfg.motionMap.idle : null);
-      playMotion(role, idle);           // 呼吸压制：只播低动作 idle
-    }
-  }
-
-  function stopLipSync(role) {
-    var a = actors[role];
-    if (!a || !a.model) return;
-    try {
-      a.model.internalModel.motionManager.update(0, 0);
-    } catch (e) { /* ignore */ }
-  }
-
-  function clearLipTimer(role) {
-    var a = actors[role];
-    if (a && a.timer) { clearTimeout(a.timer); a.timer = null; }
-  }
-
-  function endLipSync(role) {
-    stopLipSync(role);
-    setState(role, "silent");
-  }
-
-  // ---- 说话高亮（M2）：speech:arbitrated(role) 点亮，speech:completed 熄灭 ----
-  // 单画布多模型：同一时刻至多一人发声（互斥），高亮 class 作用于模型容器；
-  // actor 对象记录 speaking 状态，供后续 per-role DOM 扩展（终审 M2）。
-  function setSpeakingHighlight(role, on) {
-    var a = actors[role];
-    if (!a) return;
-    if (a.speaking === !!on) return;
-    a.speaking = !!on;
-    var holder = document.getElementById("canvas-holder");
-    if (!holder) return;
-    if (on) {
-      holder.classList.add("actor-speaking");
-      holder.setAttribute("data-speaking", role);
-    } else {
-      holder.classList.remove("actor-speaking");
-      holder.removeAttribute("data-speaking");
-    }
-  }
-
-  // ---- 口型统一入口（per-role 收尾 timer + 按 audio_id 去重） ----
-  // tts:audio_ready / live2d:lip_sync_start / audio:segment_ready 与 speech:completed
-  // 兜底均经此处理：同一音频段仅启动一次口型；新段到达先取消旧 timer，避免截断。
-  function handleLipSync(role, audioId, dur) {
-    var a = actors[role];
-    if (!a || !a.model || !audioId) return;
-    if (a.lastAudio === audioId) return;          // 去重：双路/兜底同段只处理一次
-    clearLipTimer(role);                          // 取消本角色旧段收尾 timer
-    a.lastAudio = audioId;
-    // 其他角色收尾：口型归零 + 回 idle + 取消其待触发 timer
-    Object.keys(actors).forEach(function (r) {
-      if (r !== role) { clearLipTimer(r); stopLipSync(r); setState(r, "silent"); }
-    });
-    setState(role, "talking");
-    try {
-      a.model.internalModel.motionManager.update(0, 0);
-    } catch (e) { /* ignore */ }
-    var ms = dur || 1500;
-    a.timer = setTimeout(function () {
-      a.timer = null;
-      if (a.lastAudio === audioId) endLipSync(role);   // 仍是当前段才收尾
-    }, ms);
-  }
-
-  // ---- store 事件处理（按 role 路由） ----
-  function handleEvent(type, ev) {
-    var role = ev.role || "yuki";
-    var a = actors[role];
-    if (!a || !a.model) return;
-    if (type === "live2d:motion_triggered") {
-      playMotion(role, mappedMotion(role, ev.motion));
-    } else if (type === "live2d:expression_changed") {
-      var expr = mappedExpression(role, ev.expression);
-      if (expr) { try { a.model.expression(expr); } catch (e) { /* ignore */ } }
-    } else if (type === "live2d:lip_sync_start") {
-      handleLipSync(role, ev.audio_id, ev.duration_ms);
-    } else if (type === "live2d:lip_sync_end") {
-      // 权威结束事件（后端按时长触发，带 role/audio_id）：仅当前段结束时收尾
-      if (a.lastAudio === ev.audio_id) { clearLipTimer(role); endLipSync(role); }
-    }
-  }
-
-  function wireStore() {
-    if (!window.FSStore || !window.FSStateSync) return;
-    var store = window.FSStore.createStore(window.FSStore.makeReducer(), window.FSStore.initialState());
-    var sync = new window.FSStateSync(store);
-    sync.init();
-    store.subscribe("live2d:", function (state, event) { handleEvent(event.type, event); });
-    // tts:/audio: 合成路径同样走 handleLipSync（audio_id 去重，双路只处理一次）
-    store.subscribe("tts:", function (state, event) {
-      if (event.type === "tts:audio_ready") handleLipSync(event.role || "yuki",
-        event.audio_id, event.duration_ms);
-      if (event.type === "tts:audio_ready") playTtsAudio(event.audio_id, event.role || "yuki");
-    });
-    store.subscribe("audio:", function (state, event) {
-      if (event.type === "audio:segment_ready") handleLipSync(event.role || "yuki",
-        event.audio_id, event.duration_ms || 1500);
-    });
-    // 静默态兜底：加 audio_id 守卫，仅当仍是当前口型段时才收尾（不截断新段）
-    store.subscribe("speech:completed", function (state, event) {
-      var role = event.role;
-      if (!role) return;
-      // M2：发言完成 → 移除说话高亮（与口型收尾解耦，不依赖 audio_id）
-      setSpeakingHighlight(role, false);
-      if (!actors[role]) return;
-      if (actors[role].lastAudio !== event.audio_id) return;
-      setTimeout(function () {
-        if (actors[role].lastAudio === event.audio_id) {
-          clearLipTimer(role);
-          endLipSync(role);
-        }
-      }, 220);
-    });
-    // M2 说话高亮：仲裁放行（deferred=False 即实际开说）点亮对应角色高亮；
-    // 排队待发（deferred=True）不点亮，避免未发声先高亮
-    store.subscribe("speech:arbitrated", function (state, event) {
-      if (event.role && !event.deferred) setSpeakingHighlight(event.role, true);
-    });
-
-    // ---- 直播测试台：弹幕显示 + AI 字幕（订阅 danmaku/audience/subtitle 事件） ----
-    store.subscribe("danmaku:", function (state, event) {
-      if (event.type === "danmaku:received") {
-        pushDanmu(event.user_name || "观众", event.content || "", "");
-      }
-    });
-    store.subscribe("audience:", function (state, event) {
-      if (event.type === "audience:filtered") {
-        pushDanmu("拦截", event.content || "", "filtered");
-      }
-    });
-    store.subscribe("frontend:", function (state, event) {
-      if (event.type === "frontend:subtitle_update") {
-        pushDanmu("AI · " + (event.role || "yuki"), event.text || "", "ai");
-      }
-    });
-
-    // ---- 直播间联动：角色切换 → 加载对应模型（智能助手"切换到X"驱动） ----
-    store.subscribe("session:", function (state, event) {
-      if (event.type === "session:switched" && event.role) {
-        switchActor(event.role);
-      }
-    });
-  }
-
-  // ---- 直播测试台：弹幕发送 / 显示 ----
-  var danmuInput = document.getElementById("danmuInput");
-  var danmuSend = document.getElementById("danmuSend");
-  var danmuList = document.getElementById("danmu-list");
-  var MAX_DANMU = 50;
-
-  function pushDanmu(user, text, cls) {
-    if (!danmuList) return;
-    var el = document.createElement("div");
-    el.className = "dm-item" + (cls ? " " + cls : "");
-    el.innerHTML = '<span class="dm-user">' + escHtml(user) + '</span>' + escHtml(text);
-    danmuList.appendChild(el);
-    while (danmuList.children.length > MAX_DANMU) {
-      danmuList.removeChild(danmuList.firstChild);
-    }
-  }
-  function postDanmaku(text) {
-    fetch("/api/danmaku", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content: text, user_name: "测试观众" })
-    }).then(function (r) { return r.json(); }).catch(function () {
-      pushDanmu("测试观众", "（网络错误，弹幕未发送）", "filtered");
-    });
-  }
-  function escHtml(s) {
-    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
-      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
-    });
-  }
-
-  if (danmuSend) {
-    danmuSend.addEventListener("click", function () {
-      var t = danmuInput.value.trim();
-      if (!t) return;
-      pushDanmu("测试观众", t, "");
-      postDanmaku(t);
-      danmuInput.value = "";
-    });
-  }
-  if (danmuInput) {
-    danmuInput.addEventListener("keydown", function (e) {
-      if (e.key === "Enter") { e.preventDefault(); danmuSend.click(); }
-    });
-  }
-
-  // ---- 直播测试台：TTS 播放（/ws/tts_audio 拉音频字节 → HTML5 Audio，修复"有声无响"） ----
-  var ttsSock = null;
-  var ttsAudioEls = {};    // role -> Audio 实例（每角色一个，避免切歌打断）
-  var playedAudioIds = {}; // audio_id 去重（WS 广播 + 双路可能重复）
-
-  function ensureTtsSock() {
-    if (ttsSock && (ttsSock.readyState === 0 || ttsSock.readyState === 1)) return ttsSock;
-    var proto = location.protocol === "https:" ? "wss://" : "ws://";
-    ttsSock = new WebSocket(proto + location.host + "/ws/tts_audio");
-    ttsSock.onmessage = function (ev) {
-      if (ev.data instanceof Blob && ttsSock._pendingAudioId) {
-        var url = URL.createObjectURL(ev.data);
-        var role = ttsSock._pendingRole || "yuki";
-        var audio = ttsAudioEls[role] || (ttsAudioEls[role] = new Audio());
-        audio.src = url;
-        audio.play().catch(function () { /* 自动播放策略拦截时静默 */ });
-        ttsSock._pendingAudioId = null;
-      }
-    };
-    ttsSock.onclose = function () { ttsSock = null; };
-    return ttsSock;
-  }
-  function playTtsAudio(audioId, role) {
-    if (!audioId || playedAudioIds[audioId]) return;
-    playedAudioIds[audioId] = true;
-    var ws = ensureTtsSock();
-    if (ws.readyState === 1) {
-      ws._pendingAudioId = audioId;
-      ws._pendingRole = role;
-      ws.send(JSON.stringify({ audio_id: audioId }));
-    }
-  }
-
-  async function boot() {
-    if (!window.PIXI || !window.PIXI.live2d) {
-      showHint("PixiJS / Live2D 库加载失败");
-      return;
-    }
-    app = new PIXI.Application({
-      view: document.createElement("canvas"), transparent: true, autoStart: true,
-      width: 1120, height: 720, antialias: true
-    });
-    document.getElementById("canvas-holder").appendChild(app.view);
-    window.__app = app;
-
-    for (var i = 0; i < ROLES.length; i++) {
-      var cfg = ROLES[i];
-      try {
-        await loadActor(cfg);
-      } catch (e) {
-        showHint("模型未就绪：" + "/assets/live2d/" + cfg.model + "/" + cfg.model + ".model3.json");
-      }
-    }
-    showHint("");
-    hint.style.display = "none";
-  }
-
-  // 加载单角色模型（可复用：boot 初始化 + 角色切换联动）
-  function loadActor(cfg) {
-    var url = "/assets/live2d/" + cfg.model + "/" + cfg.model + ".model3.json";
-    return PIXI.live2d.Live2DModel.from(url).then(function (model) {
-      model.anchor.set(0.5, 1.0);
-      model.scale.set(cfg.scale || 0.42);
-      model.x = app.screen.width * (cfg.x !== undefined ? cfg.x : 0.5);
-      model.y = app.screen.height;
-      app.stage.addChild(model);
-      actors[cfg.name] = { model: model, state: "silent", timer: null, lastAudio: null };
-      setState(cfg.name, "silent");   // 呼吸限制：显式进入受控 idle
-      return model;
-    });
-  }
-
-  // 角色切换联动（智能助手"切换到X"）：已加载直接静默，未加载按配置装载
-  function switchActor(role) {
-    if (!app || !window.PIXI) return;
-    if (actors[role]) { setState(role, "silent"); return; }
-    var cfg = ROLES.find(function (r) { return r.name === role; });
-    if (!cfg) return;
-    loadActor(cfg).catch(function () {
-      showHint("模型未就绪：" + cfg.model);
-    });
-  }
-
-  wireStore();
-  boot();
 })();
 </script>
 </body>

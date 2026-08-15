@@ -9,7 +9,7 @@
 
 # 模块内容清单（8 项契约）
 1. 模块身份标识：live2d 调度官 · live2d_orchestrator · 能力 live2d:load/expression/motion/lip_sync
-2. 配置契约：无（DEFAULT_MODEL="小恶魔"、DEFAULT_ROLE="yuki"、VALID_EXPRESSIONS/VALID_MOTIONS 为常量）
+2. 配置契约：无（DEFAULT_MODEL="Haru"、DEFAULT_ROLE="yuki"、VALID_EXPRESSIONS/VALID_MOTIONS 为常量）
 3. 输入契约：handle(command) — capability + payload（model_name/expression/motion/audio_id/duration_ms/role）；订阅 tts:audio_ready 事件（payload 含 role）
 4. 输出契约：返回 {"ok","data","error"}；发布 LIVE2D_LOADED/EXPRESSION_CHANGED/MOTION_TRIGGERED/LIP_SYNC_START/LIP_SYNC_END（均带 role） + FRONTEND_STATUS_UPDATE
 5. 依赖声明：logging/threading/time/typing；registry；src.shared.events
@@ -35,7 +35,7 @@ from src.shared.events import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "小恶魔"
+DEFAULT_MODEL = "Haru"
 DEFAULT_ROLE = "yuki"
 VALID_EXPRESSIONS = {"开心", "难过", "惊讶", "害羞", "生气", "平静"}
 VALID_MOTIONS = {"wave", "nod", "shake", "idle"}

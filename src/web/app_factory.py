@@ -38,6 +38,7 @@ from src.web.routes import danmaku as danmaku_route
 from src.web.routes import health as health_route
 from src.web.routes import state as state_route
 from src.web.routes import switch as switch_route
+from src.web.routes import worldbook as worldbook_route
 from src.web.routes import ws as ws_route
 
 _FRONTEND_DIR = PROJECT_ROOT / "frontend"
@@ -54,6 +55,7 @@ def create_app(context: Optional[Dict] = None) -> Flask:
     app.register_blueprint(command_route.bp)
     app.register_blueprint(switch_route.bp)
     app.register_blueprint(danmaku_route.bp)
+    app.register_blueprint(worldbook_route.bp)
 
     ws_route.init_ws(app, context.get("event_bus"),
                      seq_provider=lambda: context.get("event_bus").current_seq()
@@ -115,6 +117,10 @@ def create_app(context: Optional[Dict] = None) -> Flask:
     @app.get("/subtitle/")
     def subtitle():
         return send_from_directory(_FRONTEND_DIR / "subtitle_overlay", "index.html")
+
+    @app.get("/worldbook/")
+    def worldbook():
+        return send_from_directory(_FRONTEND_DIR / "worldbook", "index.html")
 
     @app.get("/live2d/")
     def live2d():

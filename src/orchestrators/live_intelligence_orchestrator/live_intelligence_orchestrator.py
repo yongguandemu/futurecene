@@ -31,6 +31,7 @@ from src.orchestrators.live_intelligence_orchestrator.danmaku_reactor import Dan
 from src.orchestrators.live_intelligence_orchestrator.heat_tracker import HeatTracker
 from src.orchestrators.live_intelligence_orchestrator.pace import VNPaceController
 from src.orchestrators.live_intelligence_orchestrator.speech_queue import SpeechQueue
+from src.shared.world_book import get_world_book
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +79,8 @@ class LiveIntelligenceOrchestrator:
             event_bus=event_bus,
             cache_ttl=self._config.get("context_cache_ttl", 0.5),
             danmaku_pool=self.danmaku_pool,
-            heat_tracker=self.heat_tracker)
+            heat_tracker=self.heat_tracker,
+            world_book=get_world_book())  # 世界书条目注入情境聚合（world_book_entries 槽位）
         self._started = False
         registry.bind(self.handle)
 

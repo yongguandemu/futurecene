@@ -2,162 +2,29 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>字幕叠加层 - Subtitle Overlay</title>
-<link rel="stylesheet" href="/frontend/assets/tokens.css">
+<title>字幕叠加源 - Subtitle Overlay（OBS 透明）</title>
 <script src="/frontend/assets/store.js"></script>
 <script src="/frontend/assets/state_sync.js"></script>
 <style>
-  /* OBS 浏览器源：透明背景（覆盖 tokens.css 的 body 底色） */
+  /* OBS 浏览器源：透明背景，仅渲染字幕叠加层 */
   html, body {
-    margin: 0;
-    padding: 0;
+    margin: 0; padding: 0;
     background: transparent !important;
     overflow: hidden;
-    width: 100%;
-    height: 100vh;
+    width: 100%; height: 100vh;
     font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
-  }
-
-  /* 底部居中字幕卡片 */
-  #subtitle-wrap {
-    position: fixed;
-    left: 0;
-    right: 0;
-    bottom: 36px;
-    display: flex;
-    justify-content: center;
-    pointer-events: none;
-  }
-
-  #subtitle-card {
-    max-width: 72vw;
-    background: rgba(20, 20, 30, 0.72);
-    border: 1px solid rgba(255, 255, 255, 0.18);
-    border-radius: 14px;
-    padding: 12px 22px;
-    color: #fff;
-    text-align: center;
-    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.45);
-    opacity: 0;
-    transform: translateY(12px);
-    transition: opacity 0.35s ease, transform 0.35s ease;
-  }
-
-  #subtitle-card.show {
-    opacity: 1;
-    transform: translateY(0);
-  }
-
-  #subtitle-role {
-    display: inline-block;
-    font-size: 14px;
-    color: #ffd9a0;
-    margin-bottom: 4px;
-    letter-spacing: 1px;
-    transition: color 0.25s ease;
-  }
-
-  /* 双角色主题色（复用 tokens.css 变量）：yuki 紫 / lilith 红；无角色保持默认暖金 */
-  #subtitle-role.role-yuki { color: var(--accent3, #6366f1); }
-  #subtitle-role.role-lilith { color: var(--lilith-color, #ef4444); }
-
-  /* 说话高亮：当前发言角色字幕卡边框 + 角色色光晕（OBS 透明底） */
-  #subtitle-card.role-yuki {
-    border-color: rgba(99, 102, 241, 0.7);
-    box-shadow: 0 0 18px rgba(99, 102, 241, 0.35), 0 4px 24px rgba(0, 0, 0, 0.45);
-  }
-  #subtitle-card.role-lilith {
-    border-color: rgba(239, 68, 68, 0.7);
-    box-shadow: 0 0 18px rgba(239, 68, 68, 0.35), 0 4px 24px rgba(0, 0, 0, 0.45);
-  }
-
-  #subtitle-text {
-    font-size: 26px;
-    line-height: 1.4;
-    font-weight: 600;
-    text-shadow: 0 2px 6px rgba(0, 0, 0, 0.7);
-  }
-
-  #conn-state {
-    position: fixed;
-    top: 8px;
-    right: 12px;
-    font-size: 12px;
-    color: rgba(255, 255, 255, 0.45);
   }
 </style>
 </head>
 <body>
-  <div id="conn-state">连接中…</div>
-  <div id="subtitle-wrap">
-    <div id="subtitle-card">
-      <div id="subtitle-role">小恶魔</div>
-      <div id="subtitle-text"></div>
-    </div>
-  </div>
-
-<script>
-(function () {
-  "use strict";
-
-  var card = document.getElementById("subtitle-card");
-  var roleEl = document.getElementById("subtitle-role");
-  var textEl = document.getElementById("subtitle-text");
-  var connEl = document.getElementById("conn-state");
-  var hideTimer = null;
-
-  // 角色 → 显示名（双角色：yuki/lilith；未在表内时直接显示 role 原文）
-  var ROLE_NAMES = { yuki: "Yuki", lilith: "Lilith" };
-
-  function showSubtitle(text, role) {
-    if (!text) return;
-    var name = (role && ROLE_NAMES[role]) ? ROLE_NAMES[role] : (role || "小恶魔");
-    roleEl.textContent = name;
-    textEl.textContent = text;
-    // 双角色样式：按 event.role 切换主题色与发光（无角色/未知角色 → 默认样式）
-    card.classList.remove("role-yuki", "role-lilith");
-    roleEl.classList.remove("role-yuki", "role-lilith");
-    if (role === "yuki" || role === "lilith") {
-      card.classList.add("role-" + role);
-      roleEl.classList.add("role-" + role);
+  <!-- 时序：frontend:subtitle_update 缓存 → tts:audio_ready(TTS开始播放) 显示 → speech:completed 隐藏。
+       字幕卡样式与定位由 subtitle.js 自注入，默认定位于视图垂直中部(人物中部)。 -->
+  <script src="/frontend/live2d_stream/subtitle.js"></script>
+  <script>
+    if (window.SubtitleOverlay) {
+      new window.SubtitleOverlay({ top: 58,
+        roleNames: { yuki: "Yuki", lilith: "Lilith" } }).attach();
     }
-    card.classList.add("show");
-    clearTimeout(hideTimer);
-    hideTimer = setTimeout(function () {
-      card.classList.remove("show");
-    }, 6000);
-  }
-
-  // 数据源统一到 store：frontend:subtitle_update 事件（后端 EventBus 唯一来源）
-  function renderSubtitle(event) {
-    showSubtitle(event.text, event.role);
-  }
-
-  // tts:audio_ready：当前字幕页不播放音频（音频由其它通道输出），预留扩展点
-  function maybePlayAudio(event) {
-    // 如需在字幕页播放 TTS 音频，可在此接入 /ws/tts_audio 播放器
-    return;
-  }
-
-  // 单一 store + WS 同步：只订阅字幕相关事件前缀，忽略其他状态变更
-  var store = FSStore.createStore(FSStore.makeReducer(), FSStore.initialState());
-  var sync = new FSStateSync(store, {
-    onStatusChange: function (st) {
-      if (st === "online") connEl.textContent = "已连接";
-      else if (st === "reconnecting") connEl.textContent = "重连中…";
-      else if (st === "connecting") connEl.textContent = "连接中…";
-      else connEl.textContent = "已断开";
-    }
-  });
-  sync.init();
-
-  store.subscribe("frontend:", function (state, event) {
-    if (event.type === "frontend:subtitle_update") renderSubtitle(event);
-  });
-  store.subscribe("tts:", function (state, event) {
-    if (event.type === "tts:audio_ready") maybePlayAudio(event);
-  });
-})();
-</script>
+  </script>
 </body>
 </html>

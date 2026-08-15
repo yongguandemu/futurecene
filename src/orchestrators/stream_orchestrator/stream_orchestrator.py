@@ -1,16 +1,17 @@
 """stream_orchestrator.py — 无人值守直播调度官主类（规格书 P2）
 
 能力：stream:start / stop / state / fetch_code / launch_app / app_terminate /
-      app_list / app_register。
+      app_list / app_register，以及 OBS 浏览器源 obs:sources / obs:open。
 职责边界：编排无人值守直播生命周期（取推流码 → 推流 → 心跳保活 → 停播），
-外加外部应用启动器。状态受线程锁保护，状态变更发布 stream:state_changed。
+外加外部应用启动器与 OBS 直播叠加源登记/打开。状态受线程锁保护，
+状态变更发布 stream:state_changed。
 
 # 模块内容清单（8 项契约）
-1. 模块身份标识：stream · StreamOrchestrator · 能力 stream:start/stop/state/fetch_code/launch_app/app_terminate/app_list/app_register
+1. 模块身份标识：stream · StreamOrchestrator · 能力 stream:start/stop/state/fetch_code/launch_app/app_terminate/app_list/app_register + obs:sources/obs:open
 2. 配置契约：config.room_id、config.identity_code（推流码刷新）；心跳/重试常量
-3. 输入契约：handle(command) 指令字典（capability + payload：name/path/args/cwd/env 等）
-4. 输出契约：{ok, data, error} 响应字典；发布 stream:state_changed 事件
-5. 依赖声明：logging、threading、time、typing、registry、HeadlessStreamer、StreamCodeRefresher、AgentLauncher、src.shared.events
+3. 输入契约：handle(command) 指令字典（capability + payload：name/path/args/cwd/env 或 obs 源 key 等）
+4. 输出契约：{ok, data, error} 响应字典；发布 stream:state_changed 事件；obs:sources 返回源清单，obs:open 返回打开结果
+5. 依赖声明：logging、threading、time、typing、registry、obs_sources、HeadlessStreamer、StreamCodeRefresher、AgentLauncher、src.shared.events
 6. 错误定义：获取推流码/启动推流失败进入 failed 状态并返回 error；心跳检测推流进程意外退出
 7. 生命周期方法：start()/stop()/health()；内部 _start_heartbeat()/_stop_heartbeat()
 8. 领域状态说明：_state 直播状态机（idle/starting/live/stopping/failed）、_last_error、_started_at、心跳线程与失败计数
@@ -21,11 +22,16 @@ import time
 from typing import Any, Dict, List, Optional
 
 from src.orchestrators.stream_orchestrator import registry
-from src.orchestrators.stream_orchestrator.headless_streamer import HeadlessStreamer
+from src.orchestrators.stream_orchestrator import obs_sources
+from src.orchestrators.stream_orchestrator.agent_launcher import AgentLauncher
+from src.orchestrators.stream_orchestrator.headless_streamer import (
+    DEFAULT_PAGE_URL,
+    HeadlessStreamer,
+    SOURCE_LIVE2D,
+)
 from src.orchestrators.stream_orchestrator.stream_code_refresher import (
     StreamCodeRefresher,
 )
-from src.orchestrators.stream_orchestrator.agent_launcher import AgentLauncher
 from src.shared.events import STREAM_STATE_CHANGED
 
 logger = logging.getLogger(__name__)
@@ -46,11 +52,19 @@ class StreamOrchestrator:
                  streamer: Optional[HeadlessStreamer] = None,
                  launcher: Optional[AgentLauncher] = None):
         cfg = config or {}
+        self._config = cfg
         self._event_bus = event_bus
         self._refresher = refresher or StreamCodeRefresher(
             room_id=cfg.get("room_id", 0),
             identity_code=cfg.get("identity_code", ""))
-        self._streamer = streamer or HeadlessStreamer()
+        self._streamer = streamer or HeadlessStreamer(
+            page_url=cfg.get("page_url", DEFAULT_PAGE_URL),
+            width=cfg.get("width", 1280),
+            height=cfg.get("height", 720),
+            fps=cfg.get("fps", 12),
+            bitrate=cfg.get("bitrate", "800k"),
+            source_type=cfg.get("source_type", SOURCE_LIVE2D),
+            source_path=cfg.get("source_path", ""))
         self._launcher = launcher or AgentLauncher()
         self._lock = threading.Lock()
         self._state = "idle"
@@ -89,6 +103,13 @@ class StreamOrchestrator:
                     "error": None}
         if capability == "stream:app_register":
             return self._app_register(payload)
+        if capability == "obs:sources":
+            return {"ok": True,
+                    "data": {"sources": obs_sources.manifest(),
+                             "base": obs_sources.DEFAULT_BASE},
+                    "error": None}
+        if capability == "obs:open":
+            return obs_sources.open_source(payload.get("key", ""))
         return {"ok": False, "data": {}, "error": f"unknown capability: {capability}"}
 
     def health(self) -> Dict[str, Any]:
@@ -139,7 +160,9 @@ class StreamOrchestrator:
             self._last_error = None
             self._publish_state()
         try:
-            server, key = self._refresher.fetch_stream_code()
+            server, key = self._manual_stream_code()
+            if not server or not key:
+                server, key = self._refresher.fetch_stream_code()
         except Exception as e:
             logger.error("[Stream] 获取推流码失败: %s", e)
             self._fail("获取推流码失败: {}".format(e))
@@ -220,6 +243,16 @@ class StreamOrchestrator:
             self._streamer.stop()
         except Exception as e:
             logger.warning("[Stream] 失败兜底关闭推流进程异常: %s", e)
+
+    def _manual_stream_code(self):
+        """手动推流码（config stream.rtmp_server + rtmp_key）：开播前直接填入即可，
+        无需 B站 Cookie / 直播间；未配置返回 (None, None) 走自动刷新。"""
+        server = str(self._config.get("rtmp_server") or "")
+        key = str(self._config.get("rtmp_key") or "")
+        if server and key:
+            logger.info("[Stream] 使用手动推流码 -> %s (key 长度=%d)",
+                        self._safe_host(server), len(key))
+        return (server, key) if server and key else (None, None)
 
     def _start_heartbeat(self) -> None:
         self._heartbeat_stop.clear()

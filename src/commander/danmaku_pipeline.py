@@ -25,6 +25,7 @@
 """
 import asyncio
 import logging
+import time
 from typing import Any, Dict, List, Optional
 
 from src.shared.decision_log import (
@@ -35,12 +36,21 @@ from src.shared.events import (
     AUDIENCE_FILTERED,
     DANMAKU_RECEIVED,
     FRONTEND_SUBTITLE_UPDATE,
+    GIFT_RECEIVED,
     SPEECH_COMPLETED,
 )
+from src.shared.world_book import get_world_book
+from src.commander.tool_registry import TOOL_CALL_RE
 
 logger = logging.getLogger(__name__)
 
 SESSION_ID = "default"
+
+# 礼物感谢节流间隔（秒）：礼物事件密集时合并为一次 LLM 感谢，避免刷屏
+GIFT_THANK_INTERVAL = 20.0
+
+# LLM 工具调用最大轮数：防止循环调用失控
+TOOL_MAX_ROUNDS = 3
 
 
 class DanmakuPipeline:
@@ -48,7 +58,8 @@ class DanmakuPipeline:
 
     def __init__(self, event_bus, llm_orchestrator=None, tts_orchestrator=None,
                  safety_orchestrator=None, memory_orchestrator=None,
-                 switch_manager=None, session=None, profile_loader=None):
+                 switch_manager=None, session=None, profile_loader=None,
+                 tool_registry=None):
         self._event_bus = event_bus
         self._llm = llm_orchestrator
         self._tts = tts_orchestrator
@@ -57,19 +68,23 @@ class DanmakuPipeline:
         self._switch_manager = switch_manager
         self._session = session  # SessionContext（可选注入，角色实时读取）
         self._profile_loader = profile_loader  # CharacterProfileLoader（可选注入）
+        self._tool_registry = tool_registry  # LLM 工具注册表（可选注入，默认空）
         self._started = False
+        self._last_gift_at = 0.0  # 礼物感谢节流时间戳
 
     def start(self) -> None:
         if self._started:
             return
         self._event_bus.subscribe(DANMAKU_RECEIVED, self._on_danmaku)
+        self._event_bus.subscribe(GIFT_RECEIVED, self._on_gift)
         self._event_bus.subscribe(ACTIVE_DIALOGUE, self._on_active_dialogue)
         self._started = True
-        logger.info("[DanmakuPipeline] 已订阅 danmaku:received / dialogue:active")
+        logger.info("[DanmakuPipeline] 已订阅 danmaku:received / gift:received / dialogue:active")
 
     def stop(self) -> None:
         if self._started:
             self._event_bus.unsubscribe(DANMAKU_RECEIVED, self._on_danmaku)
+            self._event_bus.unsubscribe(GIFT_RECEIVED, self._on_gift)
             self._event_bus.unsubscribe(ACTIVE_DIALOGUE, self._on_active_dialogue)
             self._started = False
 
@@ -104,16 +119,26 @@ class DanmakuPipeline:
         return "yuki"
 
     def _system_prompt(self, role: str = "") -> str:
-        """角色人设 system_prompt：实时读取角色画像，未注入时返回空（不缓存）。
+        """角色人设 system_prompt：角色画像 + 世界书核心设定 + 可用工具（未注入时返回空，不缓存）。
 
         role 为空时按当前会话角色（_current_role）读取，与既有注入逻辑一致。
+        世界书按 metadata.role 注入本角色核心条目（身份/关系/行为），联通指挥官。
         """
         if self._profile_loader is None:
             return ""
         target = role or self._current_role()
         try:
             profile = self._profile_loader.load(target)
-            return profile.system_prompt if profile else ""
+            base = profile.system_prompt if profile else ""
+            block = get_world_book().system_prompt_block(target)
+            if block:
+                base = (base + "\n\n" + block).strip() if base else block
+            # LLM 工具清单（P1：对话内工具调用）
+            if self._tool_registry is not None:
+                tools = self._tool_registry.prompt_block()
+                if tools:
+                    base = (base + "\n\n" + tools).strip() if base else tools
+            return base
         except Exception as e:
             logger.warning("[DanmakuPipeline] 角色画像加载失败: %s", e)
             return ""
@@ -145,6 +170,31 @@ class DanmakuPipeline:
         except Exception as e:
             logger.error("[DanmakuPipeline] 链路异常: %s", e)
 
+    def _on_gift(self, event: str, content: str = "", user_name: str = "",
+                 **kwargs) -> None:
+        """礼物事件：作为信息输入走 LLM 对话链路（与弹幕同管线）。
+
+        构造「【礼物】XX 送出了 Y」输入，由角色人设 + 世界书自然生成感谢与互动；
+        GIFT_THANK_INTERVAL 秒内只感谢一次（密集礼物合并），避免刷屏。
+        """
+        text = (content or "").strip()
+        if not text or not user_name:
+            return
+        now = time.time()
+        if now - self._last_gift_at < GIFT_THANK_INTERVAL:
+            logger.debug("[DanmakuPipeline] 礼物感谢节流，跳过: %s", text[:20])
+            return
+        if self._llm is None:
+            logger.debug("[DanmakuPipeline] LLM 未注入，礼物感谢跳过")
+            return
+        self._last_gift_at = now
+        try:
+            gift_input = "【礼物】{} 送出了 {}".format(user_name, text)
+            asyncio.run(self.execute_with(gift_input, role=self._current_role(),
+                                          user_name=user_name))
+        except Exception as e:
+            logger.error("[DanmakuPipeline] 礼物感谢异常: %s", e)
+
     def _on_active_dialogue(self, event: str, text: str = "", **kwargs) -> None:
         """冷场主动发言：字幕 + TTS 合成（Live2D 口型由 audio_ready 驱动）。"""
         text = (text or "").strip()
@@ -156,11 +206,22 @@ class DanmakuPipeline:
             logger.error("[DanmakuPipeline] 主动发言异常: %s", e)
 
     async def _speak_active(self, text: str) -> None:
-        """主动发言：发布字幕事件 + TTS 合成（不经过安全过滤/LLM，直接说）。"""
+        """主动发言：安全过滤 → 字幕 → TTS → 记忆 → 发言完成事件。"""
         role = self._current_role()
+        # 1. 输出安全过滤
+        if not await self._check_output(text):
+            return
+        # 2. 字幕事件
         self._event_bus.publish(FRONTEND_SUBTITLE_UPDATE,
                                 text=text, role=role, source="active_dialogue")
-        await self._synthesize(text, role)
+        # 3. TTS 合成
+        synth = await self._synthesize(text, role)
+        audio_id = synth.get("audio_id", "") if synth else ""
+        # 4. 入短期记忆（主动对话只存 assistant 消息）
+        await self._store_active_memory(text, role)
+        # 5. 发言完成事件（多角色协作触发接话决策）
+        self._event_bus.publish(SPEECH_COMPLETED, role=role, text=text,
+                                audio_id=audio_id)
 
     # ---------- 全链路编排（规格书 9.2） ----------
 
@@ -176,6 +237,10 @@ class DanmakuPipeline:
 
         # 3. LLM 对话（显式 system_prompt 优先，否则沿用 profile_loader 注入）
         reply_text = await self._chat(text, history, role, system_prompt, turn_context)
+        # 3.1 工具调用循环（P1：LLM 输出 [[TOOL:name:arg]] → 执行 → 回填 → 再生成）
+        if reply_text and self._tool_registry is not None:
+            reply_text = await self._run_tool_loop(
+                reply_text, text, history, role, system_prompt, turn_context)
         if not reply_text:
             record_decision(source="danmaku_pipeline", outcome=OUTCOME_NO_ACTION,
                             reason_code="llm_empty_reply",
@@ -248,7 +313,8 @@ class DanmakuPipeline:
     async def _chat(self, text: str, history: List[Dict[str, str]], role: str = "",
                     system_prompt: str = "", turn_context=None) -> str:
         try:
-            payload = {"text": text, "role": role, "history": history}
+            payload = {"text": text, "role": role, "history": history,
+                       "engine": "fast"}  # 弹幕互动走 fast 引擎（GLM-FlashX 优先，成本/延迟双优）
             if system_prompt:
                 # 显式传入（多角色协调器构造，含感知彼此等）优先，不叠加 profile_loader 注入
                 payload["system_prompt"] = system_prompt
@@ -269,6 +335,30 @@ class DanmakuPipeline:
             return ""
         reply = result.get("data", {}).get("reply", "")
         return (reply or "").strip()
+
+    async def _run_tool_loop(self, reply: str, text: str, history: List[Dict[str, str]],
+                             role: str, system_prompt: str, turn_context) -> str:
+        """工具调用循环：检测 [[TOOL:name:arg]] → 执行 → 结果回填 history → 再生成。
+
+        最多 TOOL_MAX_ROUNDS 轮，防止 LLM 循环调用失控。
+        """
+        current = reply
+        for _ in range(TOOL_MAX_ROUNDS):
+            m = TOOL_CALL_RE.search(current or "")
+            if not m:
+                return (current or "").strip()
+            name, arg = m.group(1), m.group(2)
+            if not self._tool_registry.has(name):
+                return (current or "").strip()  # 未注册工具：不拦截，原样返回
+            result = self._tool_registry.execute(name, arg)
+            logger.info("[DanmakuPipeline] 工具调用 %s(%s) → %s", name, arg[:30], result[:50])
+            history = history + [
+                {"role": "assistant", "content": current},
+                {"role": "user", "content": "工具 {} 结果：{}".format(name, result)}]
+            current = await self._chat(text, history, role, system_prompt, turn_context)
+            if not current:
+                return ""
+        return (current or "").strip()
 
     async def _check_output(self, reply_text: str) -> bool:
         if self._safety is None:
@@ -329,3 +419,18 @@ class DanmakuPipeline:
             })
         except Exception as e:
             logger.error("[DanmakuPipeline] 记忆存储失败: %s", e)
+
+    async def _store_active_memory(self, text: str, role: str = "") -> None:
+        """主动对话记忆：只存 assistant 消息（无用户输入）。"""
+        if self._memory is None:
+            return
+        try:
+            payload = {"content": text, "role": "assistant", "session_id": SESSION_ID}
+            if role:
+                payload["character_id"] = role
+            await self._memory.handle({
+                "capability": "memory:store",
+                "payload": payload,
+            })
+        except Exception as e:
+            logger.error("[DanmakuPipeline] 主动对话记忆存储失败: %s", e)

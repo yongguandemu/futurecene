@@ -135,10 +135,19 @@ DECISION_MATRIX: Dict[str, Dict[str, str]] = {
     "screen:click": _entry("L1", "execute", "点击属屏幕控制域内操作"),
     "screen:keypress": _entry("L1", "execute", "按键属屏幕控制域内操作"),
     "screen:execute_plan": _entry("L1", "execute", "屏幕操作计划域内执行"),
+    "screen:move": _entry("L1", "execute", "鼠标移动属屏幕控制域内操作"),
+    "screen:scroll": _entry("L1", "execute", "滚轮滚动属屏幕控制域内操作"),
+    "screen:drag": _entry("L1", "execute", "拖拽属屏幕控制域内操作"),
+    "screen:template_match": _entry("L1", "execute", "模板匹配识别属屏幕控制域内操作"),
+    "screen:cursor": _entry("L1", "execute", "虚拟光标控制属屏幕控制域内操作"),
+    "screen:cursor_state": _entry("L1", "execute", "虚拟光标状态查询域内操作"),
     "screen:*": _entry("L1", "execute", "屏幕控制域内操作"),
     "music:*": _entry("L1", "execute", "播放控制/点歌域内自治（切歌等）"),
     "experience:*": _entry("L1", "execute", "经验决策域内闭环（插火把等）"),
     "game:vn_state": _entry("L1", "execute", "VN 画面轮询属域内行为"),
+    "game:op_state": _entry("L1", "execute", "游戏操作循环状态查询域内行为"),
+    "game:op_plan": _entry("L1", "execute", "游戏操作指令规划域内行为"),
+    "game:op_command": _entry("L1", "execute", "游戏单条指令执行域内可逆操作"),
     "bilibili:connect": _entry("L1", "execute", "平台连接域内管理"),
     "bilibili:disconnect": _entry("L1", "execute", "平台断开域内管理"),
     "bilibili:send_message": _entry("L1", "execute", "消息发送是已决策的执行通道"),
@@ -154,6 +163,8 @@ DECISION_MATRIX: Dict[str, Dict[str, str]] = {
     "stream:fetch_code": _entry("L1", "execute", "取推流码域内操作"),
     "stream:launch_app": _entry("L1", "execute", "应用进程管理域内操作"),
     "stream:app_*": _entry("L1", "execute", "应用进程管理域内操作"),
+    "obs:sources": _entry("L1", "execute", "OBS 源清单查询域内操作"),
+    "obs:open": _entry("L1", "execute", "打开浏览器源域内可逆操作"),
 
     # ---------- L2 仲裁上抛：跨域冲突 ----------
     "collab:*": _entry("L2", "escalate", "发言权/协作仲裁（确定性规则链）"),
@@ -161,6 +172,8 @@ DECISION_MATRIX: Dict[str, Dict[str, str]] = {
     "game:vn_stop": _entry("L2", "escalate", "停止 VN 陪看涉屏幕/解说多域"),
     "game:mc_start": _entry("L2", "escalate", "启动 MC 实况涉屏幕/推流/解说多域"),
     "game:mc_stop": _entry("L2", "escalate", "停止 MC 实况涉屏幕/推流/解说多域"),
+    "game:op_start": _entry("L2", "escalate", "开启 AI 自动操作涉屏幕/解说多域"),
+    "game:op_stop": _entry("L2", "escalate", "关闭 AI 自动操作涉屏幕/解说多域"),
 
     # ---------- L3 总脑编排：全局上下文 / 高风险不可逆 ----------
     "llm:chat": _entry("L3", "escalate", "对话生成需全局上下文（回复弹幕）"),

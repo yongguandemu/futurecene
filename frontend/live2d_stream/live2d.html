@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Live2D 模型源（OBS 透明）</title>
+<script src="/frontend/assets/store.js"></script>
+<script src="/frontend/assets/state_sync.js"></script>
+<style>
+  /* OBS 浏览器源专用：始终透明，仅渲染 Live2D 模型，供 OBS 独立组合 */
+  html, body {
+    margin: 0; padding: 0;
+    background: transparent !important;
+    overflow: hidden;
+    width: 100%; height: 100vh;
+  }
+  #canvas-holder {
+    position: fixed;
+    left: 50%; bottom: 0;
+    transform: translateX(-50%);
+    width: 560px; height: 720px;
+    pointer-events: none;
+    z-index: 2;
+  }
+  #hint {
+    position: fixed; top: 12px; left: 12px;
+    color: rgba(255,255,255,0.6); font-size: 13px;
+    background: rgba(0,0,0,0.35); border-radius: 8px;
+    padding: 6px 12px; display: none; z-index: 4;
+  }
+  /* M2 说话高亮 */
+  #canvas-holder.actor-speaking {
+    border: 2px solid rgba(255,196,118,0.7);
+    border-radius: 16px;
+    box-shadow: 0 0 26px rgba(255,176,64,0.55), inset 0 0 20px rgba(255,200,130,0.10);
+  }
+</style>
+</head>
+<body>
+  <div id="hint">模型加载中…</div>
+  <div id="canvas-holder"></div>
+
+  <!-- Cubism2 + Cubism4 runtime + PixiJS + pixi-live2d-display -->
+  <script>window.process = window.process || { env: { NODE_ENV: "production" } };</script>
+  <script src="/frontend/vendor/live2d.min.js"></script>
+  <script src="/frontend/vendor/live2dcubismcore.min.js"></script>
+  <!-- Memory shim：live2dcubismcore.min.js 缺 Memory 命名空间，Cubism4 初始化会失败 -->
+  <script>
+    if (typeof Live2DCubismCore !== 'undefined' && !Live2DCubismCore.Memory) {
+      Live2DCubismCore.Memory = { initializeAmountOfMemory: function () {} };
+    }
+  </script>
+  <script src="/frontend/vendor/pixi.min.js"></script>
+  <script src="/frontend/vendor/pixi-live2d-display.min.js"></script>
+  <script src="/frontend/assets/live2d_driver.js"></script>
+  <script src="/frontend/live2d_stream/live2d_actor.js"></script>
+  <!-- 角色说话字幕：叠加在模型上、位于人物中部；TTS 开始播放时显示，发言完成隐藏 -->
+  <script src="/frontend/live2d_stream/subtitle.js"></script>
+  <script>
+    if (window.SubtitleOverlay) window.__subtitle = new window.SubtitleOverlay({ top: 58 }).attach();
+  </script>
+</body>
+</html>

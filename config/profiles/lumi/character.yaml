@@ -1,3 +1,4 @@
 # 本角色已停用（2026-08-03）
 # 主角色已迁移至 profiles/yuki/，本目录保留仅为 CharacterLoader 回退兜底，不再承载角色人格。
 # 请勿在此继续编辑角色内容。
+enabled: false   # 停用标记：CharacterProfileLoader.all_roles() 枚举时排除，多角色协作不注册 lumi

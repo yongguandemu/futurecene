@@ -95,6 +95,17 @@ def test_llm_injects_role_profile_and_history():
     assert "Future Scene" in sp and "查看系统状态" in sp and "切换角色" in sp
 
 
+def test_llm_injects_obs_sources_block():
+    """llm:chat 注入 OBS 直播浏览器源清单（保证 LLM 能答出源地址）。"""
+    router, bus, orch, _ = _make_router()
+    asyncio.run(router.dispatch(Command(capability="llm:chat",
+                                        payload={"text": "有哪些浏览器源"},
+                                        source="command", session_id="s1")))
+    sp = orch.handled[0]["payload"]["system_prompt"]
+    assert "【OBS 直播浏览器源】" in sp
+    assert "live2d.html" in sp and "/subtitle/" in sp and "弹幕显示" in sp
+
+
 def test_unknown_capability():
     router, bus, orch, _ = _make_router()
     result = asyncio.run(router.dispatch(Command(capability="unknown:x",

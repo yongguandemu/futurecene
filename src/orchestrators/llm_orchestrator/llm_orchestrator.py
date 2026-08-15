@@ -3,15 +3,19 @@
 职责边界（ADR-005）：只做 LLM API 调用封装（流式、重试、降级、成本统计）。
 不包含：人格组装（system_prompt 由指挥官注入）、记忆注入、意图路由。
 
-降级链（规格书 958 行）：openai → zhipu → 本地兜底回复；全链失败发布 llm:failed。
+引擎路由（成本控制，ADR-006）：payload.engine 决定降级链——
+- "fast"（日常对话/弹幕/主动话题）：zhipu(GLM-4.7-FlashX) → openai(DeepSeek) → 本地兜底
+- "pro"/缺省（复杂 Agent：游戏规划等）：openai(DeepSeek V4 Pro) → zhipu → 本地兜底
+缺省 pro 保证向后兼容与安全（贵但不会错）；对话调用方显式传 fast 声明低延迟意图。
+全链失败发布 llm:failed。
 
 # 模块内容清单（8 项契约）
 1. 模块身份标识：llm 调度官 · llm_orchestrator · 能力 llm:chat / llm:stream_chat / llm:active_dialogue
 2. 配置契约：llm.openai（api_key/base_url/model/timeout）、llm.zhipu（api_key/model/timeout）、llm.active_dialogue（min_interval 等），回退 os.environ
-3. 输入契约：handle(command) 接收 {"capability": "llm:*", "payload": {"system_prompt","history","text"}}；构造注入 event_bus / clients / config_loader
+3. 输入契约：handle(command) 接收 {"capability": "llm:*", "payload": {"system_prompt","history","text","engine"}}；engine ∈ "fast"/"pro"（缺省 pro）；构造注入 event_bus / clients / config_loader
 4. 输出契约：返回 {"ok": true, "data": {"reply","usage","latency_ms"}, "error": str|null}；发布 LLM_REQUESTED / LLM_RESPONDED / LLM_STREAM_CHUNK / LLM_FAILED
 5. 依赖声明：registry、active_dialogue、glm_client、openai_client、src.shared.events
-6. 错误定义：openai/zhipu 调用异常 → 降级下一引擎；全链失败 → 本地兜底回复 + 发布 llm:failed
+6. 错误定义：首选引擎调用异常 → 降级下一引擎（记 warning）；全链失败 → 本地兜底回复 + 发布 llm:failed
 7. 生命周期方法：start() 初始化主/备客户端、stop()、health()、handle() 能力分发
 8. 领域状态说明：_primary/_fallback（客户端）、_started、_last_error、_active（主动对话引擎）
 """
@@ -29,6 +33,10 @@ from src.shared.events import LLM_FAILED, LLM_REQUESTED, LLM_RESPONDED, LLM_STRE
 logger = logging.getLogger(__name__)
 
 _FALLBACK_REPLY = "我这边网络有点状况，先稍等一下，马上回来~"
+
+# 引擎路由模式（成本控制）：fast=日常对话(GLM-FlashX 优先)，pro=复杂 Agent(DeepSeek 优先)
+ROUTE_FAST = "fast"
+ROUTE_PRO = "pro"
 
 
 class LLMOrchestrator:
@@ -110,25 +118,39 @@ class LLMOrchestrator:
         messages.append({"role": "user", "content": text})
         return messages
 
+    def _engine_chain(self, engine: str):
+        """按路由模式返回 (client, engine_name) 降级链。
+
+        fast：zhipu(GLM-FlashX) 优先 → openai(DeepSeek) 兜底；
+        pro/其他：openai(DeepSeek V4 Pro) 优先 → zhipu 兜底。
+        """
+        if engine == ROUTE_FAST:
+            return ((self._fallback, "zhipu"), (self._primary, "openai"))
+        return ((self._primary, "openai"), (self._fallback, "zhipu"))
+
     def _chat(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         self._event_bus.publish(LLM_REQUESTED, capability="llm:chat", text=payload.get("text", ""))
         messages = self._build_messages(payload)
-        for client, engine in ((self._primary, "openai"), (self._fallback, "zhipu")):
+        engine = payload.get("engine", ROUTE_PRO)
+        chain = self._engine_chain(engine)
+        first_name = chain[0][1]
+        for client, name in chain:
             if client is None:
                 continue
             try:
                 t0 = time.time()
                 reply, usage = client.chat(messages)
                 latency_ms = int((time.time() - t0) * 1000)
-                if engine != "openai":
-                    logger.warning("[LLMOrchestrator] 降级: openai 失败 → zhipu")
+                if name != first_name:
+                    logger.warning("[LLMOrchestrator] 降级: %s 失败 → %s (engine=%s)",
+                                   first_name, name, engine)
                 self._event_bus.publish(LLM_RESPONDED, capability="llm:chat", text=reply)
                 return {"ok": True,
                         "data": {"reply": reply, "usage": usage or {}, "latency_ms": latency_ms},
                         "error": None}
             except Exception as e:
                 self._last_error = str(e)
-                logger.error("[LLMOrchestrator] %s 调用失败: %s", engine, e)
+                logger.error("[LLMOrchestrator] %s 调用失败 (engine=%s): %s", name, engine, e)
         # 全链失败：本地兜底回复 + 发布 llm:failed（规格书 958 行）
         self._event_bus.publish(LLM_FAILED, capability="llm:chat", error=self._last_error)
         return {"ok": True,
@@ -139,7 +161,10 @@ class LLMOrchestrator:
         self._event_bus.publish(LLM_REQUESTED, capability="llm:stream_chat",
                                 text=payload.get("text", ""))
         messages = self._build_messages(payload)
-        for client, engine in ((self._primary, "openai"), (self._fallback, "zhipu")):
+        engine = payload.get("engine", ROUTE_PRO)
+        chain = self._engine_chain(engine)
+        first_name = chain[0][1]
+        for client, name in chain:
             if client is None:
                 continue
             try:
@@ -151,13 +176,16 @@ class LLMOrchestrator:
                     chunks.append(chunk)
                 reply = "".join(chunks)
                 latency_ms = int((time.time() - t0) * 1000)
+                if name != first_name:
+                    logger.warning("[LLMOrchestrator] 流式降级: %s 失败 → %s (engine=%s)",
+                                   first_name, name, engine)
                 self._event_bus.publish(LLM_RESPONDED, capability="llm:stream_chat", text=reply)
                 return {"ok": True,
                         "data": {"reply": reply, "usage": {}, "latency_ms": latency_ms},
                         "error": None}
             except Exception as e:
                 self._last_error = str(e)
-                logger.error("[LLMOrchestrator] %s 流式调用失败: %s", engine, e)
+                logger.error("[LLMOrchestrator] %s 流式调用失败 (engine=%s): %s", name, engine, e)
         # 全链失败：本地兜底回复 + 发布 llm:failed
         self._event_bus.publish(LLM_FAILED, capability="llm:stream_chat", error=self._last_error)
         return {"ok": True,
@@ -176,10 +204,11 @@ class LLMOrchestrator:
         return {}
 
     def _generate_active_topic(self) -> str:
-        """主动话题生成：走真实 LLM chat（降级链），失败返回空串由话题池兜底。"""
+        """主动话题生成：走真实 LLM chat（fast 引擎，GLM-FlashX 优先），失败返回空串由话题池兜底。"""
         try:
             resp = self._chat({"text": "主动和观众打个招呼，聊点轻松的话题。",
-                               "system_prompt": "", "history": []})
+                               "system_prompt": "", "history": [],
+                               "engine": ROUTE_FAST})
             return resp.get("data", {}).get("reply", "") or ""
         except Exception:
             return ""

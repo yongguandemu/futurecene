@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Future Scene · 世界书管理</title>
+<link rel="icon" href="data:image/x-icon;base64,AA==">
+<link rel="stylesheet" href="/frontend/assets/tokens.css">
+<style>
+/* ============ 页面布局 ============ */
+body { padding: 16px; }
+.topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 16px; margin-bottom: 12px;
+  background: var(--bg-card); border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-card); box-shadow: var(--shadow-sm);
+}
+.topbar-left { display: flex; align-items: center; gap: 12px; }
+.brand { font-size: 15px; font-weight: 700; color: var(--ink-bright); }
+.brand .accent { color: var(--accent); }
+.stats { display: flex; gap: 14px; font-size: 12px; color: var(--ink-muted); }
+.stats .num { color: var(--ink-bright); font-family: var(--font-mono); font-weight: 600; }
+.topbar-right { display: flex; align-items: center; gap: 8px; }
+
+/* ============ 工具栏 ============ */
+.toolbar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 10px 16px; margin-bottom: 12px;
+  background: var(--bg-card); border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-card); box-shadow: var(--shadow-sm);
+}
+.toolbar input[type="text"] { flex: 1; min-width: 180px; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.chip {
+  padding: 3px 12px; border-radius: var(--radius-full); cursor: pointer;
+  border: 1px solid var(--border); background: var(--bg-input);
+  color: var(--ink-muted); font-size: 12px; transition: all var(--transition-fast);
+}
+.chip:hover { border-color: var(--accent); color: var(--accent); }
+.chip.active { background: var(--accent); border-color: var(--accent); color: #06251c; font-weight: 600; }
+
+/* ============ 表格 ============ */
+.table-card { padding: 0; overflow: hidden; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+thead th {
+  text-align: left; padding: 10px 14px; font-size: 11px; letter-spacing: 0.5px;
+  color: var(--ink-dim); background: var(--bg-hover);
+  border-bottom: 1px solid var(--border-subtle); white-space: nowrap;
+}
+tbody td { padding: 9px 14px; border-bottom: 1px solid var(--border-subtle); vertical-align: top; }
+tbody tr:hover { background: var(--bg-hover); }
+td.title-cell { color: var(--ink-bright); font-weight: 600; max-width: 260px; }
+td.content-cell { color: var(--ink-muted); max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+td.id-cell { color: var(--ink-dim); font-family: var(--font-mono); font-size: 12px; }
+.tag-row { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+.tag {
+  padding: 1px 8px; border-radius: var(--radius-full); font-size: 11px;
+  background: var(--bg-hover); color: var(--ink-muted); border: 1px solid var(--border-subtle);
+}
+.role-chip { font-size: 11px; font-family: var(--font-mono); color: var(--accent-icon); }
+.op-cell { white-space: nowrap; }
+.op-cell .btn { margin-right: 4px; }
+#emptyTip { padding: 40px; text-align: center; color: var(--ink-dim); font-size: 13px; }
+
+/* ============ 模态框 ============ */
+.modal-overlay {
+  position: fixed; inset: 0; background: var(--bg-overlay); z-index: var(--z-overlay);
+  display: flex; align-items: center; justify-content: center;
+}
+.modal-overlay.hidden { display: none; }
+.modal {
+  width: 520px; max-width: 92vw; max-height: 86vh; overflow-y: auto;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius-card); box-shadow: var(--shadow-lg); padding: 20px;
+}
+.modal-title { font-size: 15px; font-weight: 700; color: var(--ink-bright); margin-bottom: 16px; }
+.form-row { margin-bottom: 12px; }
+.form-row label { display: block; font-size: 12px; color: var(--ink-muted); margin-bottom: 4px; }
+.form-row input, .form-row select, .form-row textarea { width: 100%; }
+.form-row textarea { min-height: 90px; resize: vertical; }
+.form-row .hint { font-size: 11px; color: var(--ink-dim); margin-top: 3px; }
+.form-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.form-actions .btn { padding: 8px 18px; }
+
+/* ============ 建议面板 ============ */
+#suggestPanel { margin-bottom: 12px; }
+#suggestPanel .card-title { font-size: 13px; font-weight: 700; color: var(--ink-bright); margin-bottom: 8px; }
+.sugg-item {
+  display: flex; align-items: flex-start; gap: 10px; padding: 8px 0;
+  border-bottom: 1px solid var(--border-subtle); font-size: 13px;
+}
+.sugg-item:last-child { border-bottom: none; }
+.sugg-item .sugg-title { color: var(--ink-bright); font-weight: 600; }
+.sugg-item .sugg-reason { color: var(--ink-muted); font-size: 12px; }
+.pri-high { color: var(--danger); } .pri-medium { color: var(--warning); } .pri-low { color: var(--ink-dim); }
+
+/* ============ Toast ============ */
+#toast {
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(20px);
+  background: var(--bg-card); border: 1px solid var(--accent); color: var(--ink-bright);
+  padding: 10px 20px; border-radius: var(--radius); box-shadow: var(--shadow-lg);
+  font-size: 13px; opacity: 0; pointer-events: none; transition: all var(--transition);
+  z-index: var(--z-toast);
+}
+#toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+#toast.error { border-color: var(--danger); color: var(--danger); }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-left">
+    <div class="brand">世界书<span class="accent">管理</span></div>
+    <div class="stats" id="stats"><span>条目 <b class="num" id="statCount">-</b></span><span>分类 <b class="num" id="statCats">-</b></span><span>版本 v<b class="num" id="statVersion">-</b></span></div>
+  </div>
+  <div class="topbar-right">
+    <button class="btn" id="btnSuggest">💡 进化建议</button>
+    <button class="btn" id="btnRefresh">⟳ 刷新</button>
+    <button class="theme-toggle" id="themeToggle" title="切换主题">🌓</button>
+  </div>
+</header>
+
+<div class="toolbar">
+  <input type="text" id="searchInput" placeholder="搜索标题 / 内容关键词…">
+  <div class="chips" id="catChips"></div>
+  <button class="btn primary" id="btnAdd">＋ 新增条目</button>
+</div>
+
+<div class="card suggest-card hidden" id="suggestPanel">
+  <div class="card-title">进化建议（新话题 / 新角色 / 过期条目回顾）</div>
+  <div class="form-row" style="display:flex; gap:8px; align-items:center;">
+    <input type="text" id="suggestTopics" placeholder="候选话题（逗号分隔，可选）" style="flex:1;">
+    <button class="btn sm" id="btnSuggestGo">生成建议</button>
+  </div>
+  <div id="suggestList"></div>
+</div>
+
+<div class="card table-card">
+  <table>
+    <thead>
+      <tr><th>标题 / 内容</th><th>ID</th><th>分类</th><th>角色</th><th>标签</th><th>操作</th></tr>
+    </thead>
+    <tbody id="entryBody"></tbody>
+  </table>
+  <div id="emptyTip" class="hidden">暂无条目 · 点击「新增条目」或等自动进化积累观众话题</div>
+</div>
+
+<!-- 创建/编辑模态框 -->
+<div class="modal-overlay hidden" id="modal">
+  <div class="modal">
+    <div class="modal-title" id="modalTitle">新增条目</div>
+    <form id="entryForm">
+      <input type="hidden" id="fEntryId">
+      <div class="form-row">
+        <label>entry_id</label>
+        <input type="text" id="fId" placeholder="wb_yuki_xxx（唯一，创建后不可改）">
+        <div class="hint">仅创建时填写；编辑模式锁定</div>
+      </div>
+      <div class="form-row">
+        <label>标题</label>
+        <input type="text" id="fTitle" required placeholder="Yuki 的身份">
+      </div>
+      <div class="form-row">
+        <label>内容</label>
+        <textarea id="fContent" required placeholder="角色设定正文…"></textarea>
+      </div>
+      <div class="form-row" style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+        <div>
+          <label>分类</label>
+          <select id="fCategory">
+            <option value="character">character · 角色</option>
+            <option value="relationship">relationship · 关系</option>
+            <option value="behavior">behavior · 行为</option>
+            <option value="viewer">viewer · 观众</option>
+            <option value="audience_insight">audience_insight · 观众洞察</option>
+            <option value="general">general · 通用</option>
+          </select>
+        </div>
+        <div>
+          <label>角色 role</label>
+          <select id="fRole">
+            <option value="yuki">yuki</option>
+            <option value="lilith">lilith</option>
+            <option value="both">both</option>
+            <option value="">（无）</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <label>标签（逗号分隔）</label>
+        <input type="text" id="fTags" placeholder="身份, 性格">
+      </div>
+      <div class="form-actions">
+        <button type="button" class="btn" id="btnCancel">取消</button>
+        <button type="submit" class="btn primary" id="btnSave">保存</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+/* ============ 主题（tokens.css 约定） ============ */
+function applyTheme(t) {
+  document.documentElement.setAttribute('data-theme', t);
+  localStorage.setItem('fs-theme', t);
+}
+function initTheme() {
+  var t = localStorage.getItem('fs-theme') || 'light';
+  applyTheme(t);
+  return t;
+}
+var currentTheme = initTheme();
+document.getElementById('themeToggle').addEventListener('click', function () {
+  currentTheme = currentTheme === 'light' ? 'dark' : 'light';
+  applyTheme(currentTheme);
+});
+
+/* ============ 状态 ============ */
+var API = '/api/worldbook';
+var state = { entries: [], category: '', keyword: '', cats: {} };
+
+/* ============ 工具 ============ */
+function $(id) { return document.getElementById(id); }
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+function toast(msg, isErr) {
+  var el = $('toast');
+  el.textContent = msg;
+  el.className = 'show' + (isErr ? ' error' : '');
+  setTimeout(function () { el.className = ''; }, 2200);
+}
+async function api(path, opts) {
+  var resp = await fetch(API + path, opts);
+  var data;
+  try { data = await resp.json(); } catch (e) { data = {}; }
+  if (!resp.ok || data.ok === false) {
+    throw new Error((data && data.error) || ('HTTP ' + resp.status));
+  }
+  return data;
+}
+
+/* ============ 列表加载与渲染 ============ */
+async function loadList() {
+  try {
+    var qs = [];
+    if (state.category) qs.push('category=' + encodeURIComponent(state.category));
+    if (state.keyword) qs.push('keyword=' + encodeURIComponent(state.keyword));
+    var data = await api('/?' + qs.join('&'));
+    state.entries = data.data.entries;
+    renderChips();
+    renderTable();
+    renderStats();
+  } catch (e) { toast('加载失败: ' + e.message, true); }
+}
+
+function renderStats() {
+  var cats = {};
+  state.entries.forEach(function (e) { cats[e.category] = (cats[e.category] || 0) + 1; });
+  state.cats = cats;
+  $('statCount').textContent = state.entries.length;
+  $('statCats').textContent = Object.keys(cats).length;
+  $('statVersion').textContent = '2';
+}
+
+function renderChips() {
+  var box = $('catChips');
+  box.innerHTML = '';
+  var all = document.createElement('span');
+  all.className = 'chip' + (state.category === '' ? ' active' : '');
+  all.textContent = '全部';
+  all.onclick = function () { state.category = ''; loadList(); };
+  box.appendChild(all);
+  Object.keys(state.cats).forEach(function (c) {
+    var chip = document.createElement('span');
+    chip.className = 'chip' + (state.category === c ? ' active' : '');
+    chip.textContent = c + ' (' + state.cats[c] + ')';
+    chip.onclick = function () { state.category = c; loadList(); };
+    box.appendChild(chip);
+  });
+}
+
+function renderTable() {
+  var body = $('entryBody');
+  body.innerHTML = '';
+  $('emptyTip').classList.toggle('hidden', state.entries.length > 0);
+  state.entries.forEach(function (e) {
+    var tr = document.createElement('tr');
+    var role = (e.metadata && e.metadata.role) || '';
+    tr.innerHTML =
+      '<td class="title-cell">' + esc(e.title) + '</td>' +
+      '<td class="content-cell" title="' + esc(e.content) + '">' + esc(e.content) + '</td>' +
+      '<td class="id-cell">' + esc(e.entry_id) + '</td>' +
+      '<td><span class="badge info">' + esc(e.category) + '</span></td>' +
+      '<td><span class="role-chip">' + esc(role) + '</span></td>' +
+      '<td><div class="tag-row">' +
+        (e.tags || []).map(function (t) { return '<span class="tag">' + esc(t) + '</span>'; }).join('') +
+      '</div></td>' +
+      '<td class="op-cell">' +
+        '<button class="btn sm" data-act="edit">编辑</button>' +
+        '<button class="btn sm danger" data-act="del">删除</button>' +
+      '</td>';
+    tr.querySelector('[data-act="edit"]').onclick = function () { openEdit(e); };
+    tr.querySelector('[data-act="del"]').onclick = function () { delEntry(e); };
+    body.appendChild(tr);
+  });
+}
+
+/* ============ 创建 / 编辑 ============ */
+function openCreate() {
+  $('modalTitle').textContent = '新增条目';
+  $('fEntryId').value = '';
+  $('fId').value = '';
+  $('fId').disabled = false;
+  $('fTitle').value = '';
+  $('fContent').value = '';
+  $('fCategory').value = 'character';
+  $('fRole').value = 'yuki';
+  $('fTags').value = '';
+  $('modal').classList.remove('hidden');
+}
+
+function openEdit(e) {
+  $('modalTitle').textContent = '编辑条目 · ' + e.entry_id;
+  $('fEntryId').value = e.entry_id;
+  $('fId').value = e.entry_id;
+  $('fId').disabled = true;
+  $('fTitle').value = e.title || '';
+  $('fContent').value = e.content || '';
+  $('fCategory').value = e.category || 'general';
+  $('fRole').value = (e.metadata && e.metadata.role) || '';
+  $('fTags').value = (e.tags || []).join(', ');
+  $('modal').classList.remove('hidden');
+}
+
+function closeModal() { $('modal').classList.add('hidden'); }
+
+$('btnAdd').onclick = openCreate;
+$('btnCancel').onclick = closeModal;
+$('modal').addEventListener('click', function (ev) {
+  if (ev.target === $('modal')) closeModal();
+});
+
+$('entryForm').addEventListener('submit', async function (ev) {
+  ev.preventDefault();
+  var id = $('fEntryId').value;
+  var payload = {
+    title: $('fTitle').value.trim(),
+    content: $('fContent').value.trim(),
+    category: $('fCategory').value,
+    tags: $('fTags').value.split(/[,，]/).map(function (s) { return s.trim(); }).filter(Boolean),
+    metadata: { role: $('fRole').value }
+  };
+  try {
+    if (id) {
+      await api('/' + encodeURIComponent(id), {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: payload.content, title: payload.title, tags: payload.tags, reason: 'web 管理页编辑' })
+      });
+      toast('已更新');
+    } else {
+      payload.entry_id = $('fId').value.trim();
+      if (!payload.entry_id) { toast('entry_id 必填', true); return; }
+      await api('/', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      toast('已创建');
+    }
+    closeModal();
+    loadList();
+  } catch (e) { toast(e.message, true); }
+});
+
+/* ============ 删除 ============ */
+function delEntry(e) {
+  if (!confirm('确认删除「' + e.title + '」？此操作不可恢复。')) return;
+  api('/' + encodeURIComponent(e.entry_id), { method: 'DELETE' })
+    .then(function () { toast('已删除'); loadList(); })
+    .catch(function (err) { toast(err.message, true); });
+}
+
+/* ============ 进化建议 ============ */
+$('btnSuggest').onclick = function () { $('suggestPanel').classList.toggle('hidden'); };
+$('btnSuggestGo').onclick = async function () {
+  var topics = $('suggestTopics').value.split(/[,，]/).map(function (s) { return s.trim(); }).filter(Boolean);
+  try {
+    var data = await api('/suggest', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ topics: topics, characters: [], events: [] })
+    });
+    renderSuggest(data.data.suggestions);
+  } catch (e) { toast(e.message, true); }
+};
+
+function renderSuggest(list) {
+  var box = $('suggestList');
+  box.innerHTML = '';
+  if (!list.length) { box.innerHTML = '<div class="muted" style="padding:8px 0;">暂无建议</div>'; return; }
+  list.forEach(function (s) {
+    var item = document.createElement('div');
+    item.className = 'sugg-item';
+    item.innerHTML =
+      '<span class="sugg-title">' + esc(s.title) + '</span>' +
+      '<span class="badge ' + (s.priority === 'high' ? 'down' : s.priority === 'medium' ? 'degraded' : 'unknown') + '">' + esc(s.priority) + '</span>' +
+      '<span class="sugg-reason">' + esc(s.reason) + '</span>';
+    box.appendChild(item);
+  });
+}
+
+/* ============ 搜索 ============ */
+$('searchInput').addEventListener('input', function () {
+  state.keyword = this.value.trim();
+  loadList();
+});
+
+/* ============ 初始化 ============ */
+$('btnRefresh').onclick = loadList;
+loadList();
+</script>
+</body>
+</html>

@@ -39,6 +39,7 @@ _SYSTEM_CAPABILITY_NOTICE = (
     "- 切换角色：yuki / lilith（如「切换到 Lilith」）\n"
     "- 日程设置：查看/添加/编辑直播日程（如「安排明天20:00的直播日程」）\n"
     "- 调度官管理：启停模块、检查健康状态（如「检查所有调度官健康状态」）\n"
+    "- OBS 浏览器源：查询/打开直播叠加源（Live2D 模型、弹幕显示、弹幕输入、独立字幕），如「有哪些浏览器源」「打开字幕源」\n"
     "- 自由对话：直接输入任意文本聊天\n"
     "当用户询问如何使用本系统时，请基于以上真实能力回答，不要虚构或给出通用模板回答。"
 )
@@ -73,8 +74,27 @@ class CommandRouter:
         notice = _SYSTEM_CAPABILITY_NOTICE.format(display_name=display_name, role=role)
         command.payload["system_prompt"] = (
             f"{role_prompt}\n\n{notice}" if role_prompt else notice)
+        # 世界书核心设定注入（角色世界观/关系/行为，按 metadata.role 严格区分）
+        try:
+            from src.shared.world_book import get_world_book
+            wb_block = get_world_book().system_prompt_block(role)
+            if wb_block:
+                command.payload["system_prompt"] += "\n\n" + wb_block
+        except Exception as e:
+            logger.debug("[CommandRouter] 世界书注入失败: %s", e)
+        # OBS 直播浏览器源注入（保证 LLM 一定拿到源地址，不受世界书 1500 字符截断影响）
+        try:
+            from src.orchestrators.stream_orchestrator import obs_sources
+            obs_lines = ["【OBS 直播浏览器源】"]
+            for s in obs_sources.manifest():
+                obs_lines.append("- {}({}): {}".format(s["name"], s["purpose"], s["url"]))
+            command.payload["system_prompt"] += "\n\n" + "\n".join(obs_lines)
+        except Exception as e:
+            logger.debug("[CommandRouter] OBS 源注入失败: %s", e)
         # 历史上下文（前端 sendCommand 携带最近对话；_build_messages 组装 system→history→text）
         command.payload.setdefault("history", [])
+        # 引擎路由：web 命令入口为日常对话，走 fast 引擎（GLM-FlashX 优先）
+        command.payload["engine"] = "fast"
 
     async def _prepare_live(self, command: Command) -> Dict[str, Any]:
         """编排直播准备（直播间集成 · 智能助手联动）：
@@ -83,7 +103,7 @@ class CommandRouter:
         """
         cid = command.command_id
         role = getattr(self._session, "role", "yuki") if self._session else "yuki"
-        model_name = "小恶魔" if role == "lilith" else "Hiyori"
+        model_name = "Haru" if role == "lilith" else "Hiyori"
         orch = self._registry.match("live2d:load")
         load_ok = False
         if orch is not None and self._switch_manager.is_enabled(orch.name):

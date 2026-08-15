@@ -24,11 +24,14 @@ _SWITCH_ROLE_NL_RE = re.compile(r"^切换(?:角色)?\s*(?:为|到|成)?\s*(yuki|
 _POINT_SONG_RE = re.compile(r"^!点歌\s+(.+)$")
 _STATUS_RE = re.compile(r"^!(状态|status)$", re.IGNORECASE)
 # 直播准备意图（直播间集成 · 智能助手联动）
-_LIVE2D_LOAD_RE = re.compile(r"^(?:加载|切换)?(?:模型)?\s*(hiyori|小恶魔|yuki|lilith)\s*(?:模型)?$",
+_LIVE2D_LOAD_RE = re.compile(r"^(?:加载|切换)?(?:模型)?\s*(hiyori|haru|小恶魔|yuki|lilith)\s*(?:模型)?$",
                              re.IGNORECASE)
 _LIVE2D_EXPRESSION_RE = re.compile(r"^做(?:个)?(开心|难过|惊讶|害羞|生气|平静)(?:的表情)?$")
 _LIVE2D_MOTION_RE = re.compile(r"^(挥挥手|挥手|点头|摇头|打招呼)$")
 _LIVE2D_PREPARE_RE = re.compile(r"^准备(?:一下)?(?:直播|开播)(?:界面)?$")
+# OBS 浏览器源（直播间源登记 · 智能助手联动）：查询清单 / 打开指定源
+_OBS_SOURCES_RE = re.compile(r"^(?:有哪些)?(?:OBS|obs|浏览器|直播|开播)源(?:地址|清单|有哪些|是什么)?$")
+_OBS_OPEN_RE = re.compile(r"^(?:打开|启动)(?:OBS|obs|浏览器)?(?:的)?(.{1,8})源$")
 
 
 @dataclass
@@ -105,6 +108,18 @@ class IntentParser:
         m = _LIVE2D_PREPARE_RE.match(raw)
         if m:
             return Command(capability="live2d:prepare", payload={},
+                           source=source, session_id=session_id, raw=raw)
+
+        # OBS 浏览器源：查询清单 / 打开指定源（key 由 obs_sources.resolve_key 解析别名）
+        m = _OBS_SOURCES_RE.match(raw)
+        if m:
+            return Command(capability="obs:sources", payload={},
+                           source=source, session_id=session_id, raw=raw)
+
+        m = _OBS_OPEN_RE.match(raw)
+        if m:
+            return Command(capability="obs:open",
+                           payload={"key": m.group(1).strip().lower()},
                            source=source, session_id=session_id, raw=raw)
 
         # 系统命令（! 前缀未匹配到已知规则）→ 指挥官内部处理

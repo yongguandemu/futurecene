@@ -1,10 +1,10 @@
 """test_danmaku_pipeline.py — 弹幕→对话管线（规格书 9.2，指挥官层订阅）"""
 from types import SimpleNamespace
 
-from src.commander.danmaku_pipeline import DanmakuPipeline
+from src.commander.danmaku_pipeline import DanmakuPipeline, GIFT_THANK_INTERVAL
 from src.commander.session_context import SessionContext
 from src.shared.event_bus import EventBus
-from src.shared.events import DANMAKU_RECEIVED, FRONTEND_SUBTITLE_UPDATE
+from src.shared.events import DANMAKU_RECEIVED, FRONTEND_SUBTITLE_UPDATE, GIFT_RECEIVED
 
 
 class FakeLLM:
@@ -64,12 +64,13 @@ class FakeProfileLoader:
 
 
 def _make_pipeline(llm=None, tts=None, session=None, safety=None, memory=None,
-                   profile_loader=None):
+                   profile_loader=None, tool_registry=None):
     bus = EventBus()
     bus.reset()
     pipe = DanmakuPipeline(event_bus=bus, llm_orchestrator=llm, tts_orchestrator=tts,
                            safety_orchestrator=safety, memory_orchestrator=memory,
-                           session=session, profile_loader=profile_loader)
+                           session=session, profile_loader=profile_loader,
+                           tool_registry=tool_registry)
     pipe.start()
     return pipe, bus
 
@@ -161,21 +162,53 @@ def test_stop_unsubscribes():
 
 
 def test_active_speaker_publishes_subtitle_and_tts():
-    """dialogue:active → 主动发言（字幕 + TTS 调用，直播测试台主动模式）。"""
-    from src.shared.events import ACTIVE_DIALOGUE
+    """dialogue:active → 主动发言（字幕 + TTS + 安全过滤 + 记忆 + 发言完成事件）。"""
+    from src.shared.events import ACTIVE_DIALOGUE, SPEECH_COMPLETED
     bus = EventBus()
     bus.reset()
     llm = FakeLLM(reply="主动说话内容")
     tts = FakeTTS()
+    safety = FakeSafety()
+    memory = FakeMemory()
     pipe = DanmakuPipeline(event_bus=bus, llm_orchestrator=llm,
-                           tts_orchestrator=tts)
+                           tts_orchestrator=tts, safety_orchestrator=safety,
+                           memory_orchestrator=memory)
     seen = {}
     bus.subscribe(FRONTEND_SUBTITLE_UPDATE, lambda event, **kw: seen.update(kw))
+    completed = []
+    bus.subscribe(SPEECH_COMPLETED, lambda event, **kw: completed.append(kw))
     pipe.start()
     bus.publish(ACTIVE_DIALOGUE, text="今天播点什么好呢",
                 mood="default", role="yuki", timestamp=0.0)
     assert seen.get("text") == "今天播点什么好呢"
     assert tts.calls and tts.calls[0]["capability"] in ("tts:synthesize", "tts:stream_synthesize")
+    # 安全输出过滤已调用
+    assert any(c["capability"] == "safety:check_output" for c in safety.calls)
+    # 记忆存储已调用（主动对话只存 assistant 消息）
+    store_calls = [c for c in memory.calls if c["capability"] == "memory:store"]
+    assert len(store_calls) == 1
+    assert store_calls[0]["payload"]["role"] == "assistant"
+    # 发言完成事件已发布
+    assert completed and completed[0]["text"] == "今天播点什么好呢"
+    assert completed[0]["role"] == "yuki"
+
+
+def test_active_speaker_blocked_by_safety():
+    """主动发言被安全过滤拦截时不发布字幕/TTS。"""
+    from src.shared.events import ACTIVE_DIALOGUE
+    bus = EventBus()
+    bus.reset()
+    llm = FakeLLM()
+    tts = FakeTTS()
+    safety = FakeSafety(verdict="block")
+    pipe = DanmakuPipeline(event_bus=bus, llm_orchestrator=llm,
+                           tts_orchestrator=tts, safety_orchestrator=safety)
+    seen = {}
+    bus.subscribe(FRONTEND_SUBTITLE_UPDATE, lambda event, **kw: seen.update(kw))
+    pipe.start()
+    bus.publish(ACTIVE_DIALOGUE, text="敏感内容", mood="default", role="yuki")
+    assert seen == {}  # 安全过滤拦截，不发布字幕
+    assert tts.calls == []  # 不调用 TTS
 
 
 def test_execute_with_uses_role_and_publishes_completed():
@@ -231,7 +264,7 @@ def test_execute_with_no_llm_returns_llm_not_injected():
 
 
 def test_execute_with_fallback_system_prompt_from_profile_loader():
-    """Task 15 评审补覆盖：不传显式 system_prompt 时，沿用 profile_loader 注入的画像 prompt。"""
+    """Task 15 评审补覆盖：不传显式 system_prompt 时，沿用 profile_loader 注入的画像 prompt + 世界书核心设定。"""
     import asyncio
     llm = FakeLLM(reply="你好呀")
     tts = FakeTTS()
@@ -240,7 +273,9 @@ def test_execute_with_fallback_system_prompt_from_profile_loader():
     result = asyncio.run(pipe.execute_with("你好", role="lilith"))
     assert result["ok"] is True
     assert llm.calls and llm.calls[0]["payload"]["role"] == "lilith"
-    assert llm.calls[0]["payload"]["system_prompt"] == "你是Lilith（画像注入）"
+    sp = llm.calls[0]["payload"]["system_prompt"]
+    assert "你是Lilith（画像注入）" in sp
+    assert "【世界设定】" in sp and "莉莉丝" in sp  # 世界书核心条目已注入
     assert tts.calls[0]["payload"]["role"] == "lilith"
 
 
@@ -293,3 +328,110 @@ def test_execute_with_memory_store_carries_character_id():
     # 记忆检索同样按角色分桶
     retrieve_calls = [c for c in memory.calls if c["capability"] == "memory:retrieve"]
     assert retrieve_calls and retrieve_calls[0]["payload"]["character_id"] == "lilith"
+
+
+# =====================================================================
+# 礼物 → LLM 对话（信息输入同管线，含节流）
+# =====================================================================
+
+def _publish_gift(bus, content="小星星 x1", user_name="土豪观众"):
+    bus.publish(GIFT_RECEIVED, content=content, user_name=user_name,
+                event_type="gift",
+                extra={"num": 1, "price": 100, "gift_name": "小星星"})
+
+
+def test_gift_event_triggers_llm_thanks():
+    """礼物事件：构造「【礼物】XX 送出了 Y」输入走 LLM 对话链路，感谢文本进 TTS。"""
+    llm = FakeLLM(reply="谢谢老板～")
+    tts = FakeTTS()
+    pipe, bus = _make_pipeline(llm=llm, tts=tts)
+    _publish_gift(bus)
+    assert llm.calls
+    payload = llm.calls[0]["payload"]
+    assert "【礼物】" in payload["text"] and "土豪观众" in payload["text"]
+    assert "小星星 x1" in payload["text"]
+    assert tts.calls  # 感谢回复走了 TTS 合成
+
+
+def test_gift_thanks_throttled():
+    """节流：GIFT_THANK_INTERVAL 秒内多条礼物合并为一次 LLM 感谢。"""
+    llm = FakeLLM(reply="谢谢")
+    tts = FakeTTS()
+    pipe, bus = _make_pipeline(llm=llm, tts=tts)
+    _publish_gift(bus, user_name="观众A")
+    _publish_gift(bus, user_name="观众B")  # 紧随其后 → 节流跳过
+    assert len(llm.calls) == 1
+    assert "观众A" in llm.calls[0]["payload"]["text"]
+
+
+def test_gift_ignored_without_llm():
+    """LLM 未注入：礼物事件跳过，不抛异常。"""
+    pipe, bus = _make_pipeline(llm=None, tts=None)
+    _publish_gift(bus)
+    assert pipe._last_gift_at == 0.0  # 未触发对话，节流时间戳未更新
+
+
+def test_gift_ignored_without_user():
+    """缺 user_name / content：不进入对话链路。"""
+    llm = FakeLLM(reply="谢谢")
+    pipe, bus = _make_pipeline(llm=llm)
+    bus.publish(GIFT_RECEIVED, content="", user_name="")
+    assert not llm.calls
+
+
+# =====================================================================
+# LLM 工具调用（P1：[[TOOL:name:arg]] 执行循环）
+# =====================================================================
+
+class FakeToolLLM:
+    """多轮回复：第 1 轮返回工具调用标记，之后返回最终回复。"""
+
+    def __init__(self, tool_reply='[[TOOL:worldbook_lookup:Yuki 的身份]]',
+                 final_reply="她是 AI 实习生～"):
+        self.tool_reply = tool_reply
+        self.final_reply = final_reply
+        self.calls = []
+
+    async def handle(self, command):
+        self.calls.append(command)
+        reply = self.tool_reply if len(self.calls) == 1 else self.final_reply
+        return {"ok": True, "data": {"reply": reply, "usage": {}}, "error": None}
+
+
+def test_tool_call_loop_executes_and_returns_final():
+    """工具调用循环：[[TOOL:...]] → 执行 → 结果回填 history → 最终回复。"""
+    import asyncio
+    from src.commander.tool_registry import ToolRegistry
+    llm = FakeToolLLM()
+    tts = FakeTTS()
+    pipe, bus = _make_pipeline(llm=llm, tts=tts, tool_registry=ToolRegistry())
+    result = asyncio.run(pipe.execute_with("Yuki 是什么设定？", role="yuki"))
+    assert result["ok"] is True
+    assert result["data"]["reply"] == "她是 AI 实习生～"
+    assert len(llm.calls) == 2  # 工具调用轮 + 最终轮
+    # 第二轮 history 包含工具结果回填
+    history = llm.calls[1]["payload"]["history"]
+    assert any("工具 worldbook_lookup 结果" in str(h) for h in history)
+    assert tts.calls  # 最终回复走了 TTS
+
+
+def test_tool_loop_plain_reply_single_call():
+    """LLM 直接返回普通文本（无工具标记）→ 只调一次。"""
+    import asyncio
+    from src.commander.tool_registry import ToolRegistry
+    llm = FakeLLM(reply="直接回答")
+    pipe, bus = _make_pipeline(llm=llm, tool_registry=ToolRegistry())
+    result = asyncio.run(pipe.execute_with("你好", role="yuki"))
+    assert result["data"]["reply"] == "直接回答"
+    assert len(llm.calls) == 1
+
+
+def test_tool_loop_unregistered_tool_passthrough():
+    """未注册工具：不拦截，原样返回（不进入循环）。"""
+    import asyncio
+    from src.commander.tool_registry import ToolRegistry
+    llm = FakeToolLLM(tool_reply="[[TOOL:no_such_tool:x]]")
+    pipe, bus = _make_pipeline(llm=llm, tool_registry=ToolRegistry())
+    result = asyncio.run(pipe.execute_with("hi", role="yuki"))
+    assert result["data"]["reply"] == "[[TOOL:no_such_tool:x]]"
+    assert len(llm.calls) == 1

@@ -36,6 +36,24 @@ def test_status_command():
     assert cmd.capability == "system:status"
 
 
+def test_obs_sources_command():
+    for text in ("有哪些浏览器源", "OBS源清单", "直播源地址", "浏览器源"):
+        cmd = _parse(text)
+        assert cmd.capability == "obs:sources", text
+
+
+def test_obs_open_command():
+    cmd = _parse("打开字幕源")
+    assert cmd.capability == "obs:open"
+    assert cmd.payload["key"] == "字幕"
+    cmd = _parse("打开弹幕显示源")
+    assert cmd.capability == "obs:open"
+    assert cmd.payload["key"] == "弹幕显示"
+    cmd = _parse("打开Live2D源")
+    assert cmd.capability == "obs:open"
+    assert cmd.payload["key"] == "live2d"
+
+
 def test_unknown_bang_command():
     cmd = _parse("!随便什么")
     assert cmd.capability == "system:command"

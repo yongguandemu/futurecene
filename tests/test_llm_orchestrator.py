@@ -53,6 +53,64 @@ def test_chat_success():
     assert result["error"] is None
 
 
+# =====================================================================
+# 引擎路由（ADR-006 成本控制）：fast=GLM-FlashX 优先，pro=DeepSeek 优先
+# =====================================================================
+
+def test_chat_engine_fast_prefers_zhipu():
+    """engine=fast：zhipu(GLM-FlashX) 优先，成功时不触达 openai(DeepSeek)。"""
+    primary = FakeClient(reply="deepseek")
+    fallback = FakeClient(reply="glm-fast")
+    orch, _ = _make_orchestrator(primary=primary, fallback=fallback)
+    result = asyncio.run(orch.handle({"capability": "llm:chat",
+                                      "payload": {"text": "hi", "engine": "fast"}}))
+    assert result["data"]["reply"] == "glm-fast"
+    assert fallback.chat_calls == 1 and primary.chat_calls == 0
+
+
+def test_chat_engine_fast_falls_back_to_openai():
+    """engine=fast 且 zhipu 失败 → 降级 openai(DeepSeek) 兜底。"""
+    primary = FakeClient(reply="deepseek")
+    fallback = FakeClient(fail=True)
+    orch, _ = _make_orchestrator(primary=primary, fallback=fallback)
+    result = asyncio.run(orch.handle({"capability": "llm:chat",
+                                      "payload": {"text": "hi", "engine": "fast"}}))
+    assert result["data"]["reply"] == "deepseek"
+    assert fallback.chat_calls == 1 and primary.chat_calls == 1
+
+
+def test_chat_engine_pro_prefers_openai():
+    """engine=pro：openai(DeepSeek V4 Pro) 优先，成功时不触达 zhipu。"""
+    primary = FakeClient(reply="deepseek")
+    fallback = FakeClient(reply="glm")
+    orch, _ = _make_orchestrator(primary=primary, fallback=fallback)
+    result = asyncio.run(orch.handle({"capability": "llm:chat",
+                                      "payload": {"text": "hi", "engine": "pro"}}))
+    assert result["data"]["reply"] == "deepseek"
+    assert primary.chat_calls == 1 and fallback.chat_calls == 0
+
+
+def test_chat_default_engine_pro_backward_compat():
+    """缺省 engine 保持 openai 优先（向后兼容，pro 安全默认）。"""
+    primary = FakeClient(reply="deepseek")
+    fallback = FakeClient(reply="glm")
+    orch, _ = _make_orchestrator(primary=primary, fallback=fallback)
+    result = asyncio.run(orch.handle({"capability": "llm:chat",
+                                      "payload": {"text": "hi"}}))
+    assert result["data"]["reply"] == "deepseek"
+    assert primary.chat_calls == 1 and fallback.chat_calls == 0
+
+
+def test_stream_chat_engine_fast_prefers_zhipu():
+    """流式同样按 engine 路由：fast 走 zhipu 优先。"""
+    primary = FakeClient(chunks=("D", "S"))
+    fallback = FakeClient(chunks=("G", "L"))
+    orch, _ = _make_orchestrator(primary=primary, fallback=fallback)
+    result = asyncio.run(orch.handle({"capability": "llm:stream_chat",
+                                      "payload": {"text": "hi", "engine": "fast"}}))
+    assert result["data"]["reply"] == "GL"
+
+
 def test_chat_fallback_on_primary_failure():
     primary = FakeClient(fail=True)
     fallback = FakeClient(reply="降级回复")

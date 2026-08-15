@@ -39,8 +39,8 @@ def test_all_p2_orchestrators_wire(monkeypatch):
     names = {o.name for o in registry.all()}
     expected = {"llm", "tts", "live2d", "bilibili", "memory", "safety",
                 "screen", "game", "music", "platform", "stream", "experience",
-                "intelligence"}
-    assert names == expected  # 13 个，不多不少
+                "intelligence", "schedule"}
+    assert names == expected  # 14 个，不多不少
 
 
 def test_p2_config_sections_present(monkeypatch):

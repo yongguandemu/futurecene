@@ -15,6 +15,9 @@ llm:
   zhipu:
     api_key: ${{ env.ZHIPU_API_KEY }}       # 智谱 API Key（fast 引擎主力，日常对话/弹幕互动）
     model: ${{ env.ZHIPU_MODEL }}           # glm-4.7-flashx（轻量高速版，付费保吞吐，与 .env 保持一致）
+    timeout: 6           # 单次调用线程级超时（秒）：SDK 自带超时不可靠时兜底，超时立即降级
+  openai:
+    timeout: 15          # 单次调用线程级超时（秒）
   active_dialogue:
     enabled: false        # 主动对话总开关（默认开）。开着会定时调 LLM+TTS，消耗积分，测试期建议关闭。
 

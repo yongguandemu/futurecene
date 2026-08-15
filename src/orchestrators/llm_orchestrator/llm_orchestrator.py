@@ -19,6 +19,7 @@
 7. 生命周期方法：start() 初始化主/备客户端、stop()、health()、handle() 能力分发
 8. 领域状态说明：_primary/_fallback（客户端）、_started、_last_error、_active（主动对话引擎）
 """
+import concurrent.futures
 import logging
 import os
 import time
@@ -31,6 +32,9 @@ from src.orchestrators.llm_orchestrator.openai_client import OpenAIClient
 from src.shared.events import LLM_FAILED, LLM_REQUESTED, LLM_RESPONDED, LLM_STREAM_CHUNK
 
 logger = logging.getLogger(__name__)
+
+# LLM 调用线程池（线程级超时用；挂起线程在网络恢复后自然结束）
+_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=8, thread_name_prefix="llm-call")
 
 _FALLBACK_REPLY = "我这边网络有点状况，先稍等一下，马上回来~"
 
@@ -82,8 +86,16 @@ class LLMOrchestrator:
             model=zhipu_cfg.get("model") or os.environ.get("ZHIPU_MODEL", "glm-4.7-flash"),
             timeout=float(os.environ.get("ZHIPU_TIMEOUT", "8")),
         )
+        # 线程级调用超时（config.yaml llm.<engine>.timeout 优先，回退环境变量/默认）
+        self._timeouts = {
+            "zhipu": float(zhipu_cfg.get("timeout")
+                           or os.environ.get("ZHIPU_TIMEOUT", "10")),
+            "openai": float(openai_cfg.get("timeout")
+                            or os.environ.get("OPENAI_TIMEOUT", "15")),
+        }
         self._started = True
-        logger.info("[LLMOrchestrator] 已启动：primary=openai fallback=zhipu")
+        logger.info("[LLMOrchestrator] 已启动：primary=openai fallback=zhipu "
+                    "timeouts=%s", self._timeouts)
 
     async def handle(self, command: Dict[str, Any]) -> Dict[str, Any]:
         capability = command.get("capability", "")
@@ -105,6 +117,22 @@ class LLMOrchestrator:
         self._started = False
 
     # ---------- 内部实现 ----------
+
+    @staticmethod
+    def _call_with_timeout(fn, timeout: float, name: str):
+        """线程级超时调用：SDK 自带超时不可靠（智谱实测 8s 配置可挂 77s）时兜底。
+
+        超时后立即抛 TimeoutError 让上层走降级链；挂起的线程会在网络恢复后自然结束，
+        演示/生产场景均可接受（每次超时最多泄漏一个正在等待的 SDK 调用线程）。
+        """
+        fut = _EXECUTOR.submit(fn)
+        try:
+            return fut.result(timeout=timeout)
+        except concurrent.futures.TimeoutError:
+            logger.warning("[LLMOrchestrator] %s 调用线程级超时（%.0fs），触发降级", name, timeout)
+            raise TimeoutError(f"{name} 调用超时 ({timeout}s)")
+        except Exception as e:
+            raise e
 
     def _build_messages(self, payload: Dict[str, Any]) -> List[Dict[str, str]]:
         """组装 messages：system_prompt（指挥官注入）→ history → 当前用户输入。"""

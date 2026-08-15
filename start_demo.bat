@@ -42,7 +42,15 @@ if not exist .env (
 )
 echo   .env 已存在
 
-echo [4/4] 启动服务，浏览器将自动打开控制台...
+echo [4/4] 检查服务是否已在运行（端口 5000）...
+netstat -ano | findstr ":5000 " | findstr "LISTENING" >nul 2>nul
+if not errorlevel 1 (
+    echo   检测到服务已在运行（端口 5000 被监听），直接打开控制台，无需重复启动。
+    start "" "http://127.0.0.1:5000/dashboard/"
+    pause
+    exit /b 0
+)
+echo   端口空闲，启动服务，浏览器将自动打开控制台...
 echo   停止服务：在窗口按 Ctrl+C
 echo.
 python run.py

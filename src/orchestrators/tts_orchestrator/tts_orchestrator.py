@@ -82,11 +82,16 @@ class TTSOrchestrator:
                 timeout=float(wu_cfg.get("timeout", 30)),
             )
         if self._fallback is None:
-            self._fallback = DashScopeTTSClient(
-                api_key=ds_cfg.get("api_key") or os.environ.get("DASHSCOPE_API_KEY", ""),
-                model=ds_cfg.get("model") or "cosyvoice-v3.5-plus",
-                voice=ds_cfg.get("voice_id") or DASHSCOPE_ROLE_VOICES["yuki"],
-            )
+            try:
+                self._fallback = DashScopeTTSClient(
+                    api_key=ds_cfg.get("api_key") or os.environ.get("DASHSCOPE_API_KEY", ""),
+                    model=ds_cfg.get("model") or "cosyvoice-v3.5-plus",
+                    voice=ds_cfg.get("voice_id") or DASHSCOPE_ROLE_VOICES["yuki"],
+                )
+            except RuntimeError as e:
+                # dashscope SDK 未安装：备引擎降级为空，主引擎 wusound 不受影响
+                logger.warning("[TTSOrchestrator] CosyVoice 备引擎不可用（%s），仅使用主引擎 wusound", e)
+                self._fallback = None
         self._cache_dir.mkdir(parents=True, exist_ok=True)
         self._started = True
         logger.info("[TTSOrchestrator] 已启动：primary=wusound fallback=cosyvoice")

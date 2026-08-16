@@ -27,6 +27,7 @@ try:
     from dashscope.audio.tts_v2 import AudioFormat, ResultCallback, SpeechSynthesizer
 except ImportError:
     AudioFormat = None  # type: ignore
+    ResultCallback = None  # type: ignore
     SpeechSynthesizer = None  # type: ignore
 
 DEFAULT_MODEL = "cosyvoice-v3.5-plus"
@@ -58,35 +59,43 @@ def _pick_audio_format(sample_rate: int = DEFAULT_SAMPLE_RATE):
     return getattr(AudioFormat, name)
 
 
-class _AudioCallback(ResultCallback):
-    """收集音频字节流。"""
+if SpeechSynthesizer is not None:
 
-    def __init__(self):
-        self.audio: bytearray = bytearray()
-        self._done = threading.Event()
-        self.error: Optional[str] = None
+    class _AudioCallback(ResultCallback):
+        """收集音频字节流。"""
 
-    def on_open(self):
-        pass
+        def __init__(self):
+            self.audio: bytearray = bytearray()
+            self._done = threading.Event()
+            self.error: Optional[str] = None
 
-    def on_data(self, data) -> None:
-        try:
-            self.audio.extend(data)
-        except Exception as e:
-            self.error = f"on_data 失败: {e}"
+        def on_open(self):
+            pass
 
-    def on_complete(self):
-        self._done.set()
+        def on_data(self, data) -> None:
+            try:
+                self.audio.extend(data)
+            except Exception as e:
+                self.error = f"on_data 失败: {e}"
 
-    def on_error(self, message: str) -> None:
-        self.error = message
-        self._done.set()
+        def on_complete(self):
+            self._done.set()
 
-    def on_close(self):
-        self._done.set()
+        def on_error(self, message: str) -> None:
+            self.error = message
+            self._done.set()
 
-    def wait(self, timeout: float = 60.0) -> bool:
-        return self._done.wait(timeout)
+        def on_close(self):
+            self._done.set()
+
+        def wait(self, timeout: float = 60.0) -> bool:
+            return self._done.wait(timeout)
+
+else:
+
+    class _AudioCallback:  # dashscope 缺失占位：永不实例化（synthesize 已短路）
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError("dashscope 未安装，CosyVoice 引擎不可用")
 
 
 class DashScopeTTSClient:

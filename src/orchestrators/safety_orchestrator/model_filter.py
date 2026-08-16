@@ -50,28 +50,36 @@ _SAFE_LABELS = {0, 3}   # safe 与 unknown(低置信) 一律放行
 _BLOCK_LABELS = {1, 2}  # suspicious / dangerous
 
 
-class _TextCNNModel(nn.Module):
-    """字符级 TextCNN：embedding → 多尺寸卷积 → 池化拼接 → fc。"""
+if _HAS_TORCH:
 
-    def __init__(self, vocab_size: int, embed_dim: int = 64,
-                 num_filters: int = 64, filter_sizes=(2, 3, 4),
-                 num_classes: int = 4):
-        super().__init__()
-        self.embedding = nn.Embedding(vocab_size, embed_dim, padding_idx=0)
-        self.convs = nn.ModuleList([
-            nn.Conv1d(embed_dim, num_filters, k) for k in filter_sizes
-        ])
-        self.dropout = nn.Dropout(0.5)
-        self.fc = nn.Linear(num_filters * len(filter_sizes), num_classes)
+    class _TextCNNModel(nn.Module):
+        """字符级 TextCNN：embedding → 多尺寸卷积 → 池化拼接 → fc。"""
 
-    def forward(self, x):
-        emb = self.embedding(x).transpose(1, 2)          # (B, embed, L)
-        pooled = [
-            F.max_pool1d(F.relu(conv(emb)), conv(emb).size(-1)).squeeze(-1)
-            for conv in self.convs
-        ]
-        cat = torch.cat(pooled, dim=1)                   # (B, filters*k)
-        return self.fc(self.dropout(cat))
+        def __init__(self, vocab_size: int, embed_dim: int = 64,
+                     num_filters: int = 64, filter_sizes=(2, 3, 4),
+                     num_classes: int = 4):
+            super().__init__()
+            self.embedding = nn.Embedding(vocab_size, embed_dim, padding_idx=0)
+            self.convs = nn.ModuleList([
+                nn.Conv1d(embed_dim, num_filters, k) for k in filter_sizes
+            ])
+            self.dropout = nn.Dropout(0.5)
+            self.fc = nn.Linear(num_filters * len(filter_sizes), num_classes)
+
+        def forward(self, x):
+            emb = self.embedding(x).transpose(1, 2)          # (B, embed, L)
+            pooled = [
+                F.max_pool1d(F.relu(conv(emb)), conv(emb).size(-1)).squeeze(-1)
+                for conv in self.convs
+            ]
+            cat = torch.cat(pooled, dim=1)                   # (B, filters*k)
+            return self.fc(self.dropout(cat))
+
+else:
+
+    class _TextCNNModel:  # torch 缺失占位：永不实例化（_try_load 已短路）
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError("torch 未安装，模型过滤不可用")
 
 
 class ModelFilter:

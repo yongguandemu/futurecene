@@ -3,6 +3,9 @@
 能力：screen:capture / screen:click / screen:keypress / screen:execute_plan /
 screen:move / screen:scroll / screen:drag / screen:template_match /
 screen:cursor / screen:cursor_state。
+输入注入分层（P1 注入修复）：payload 支持 backend=auto|postmessage|sendinput 与
+window_title；auto 时经 input_backend 按 L1 PostMessage（后台窗口）→ L2 游戏桥
+→ L0 SendInput（前台兜底）选择后端，解决「后台采集与前台注入矛盾」。
 职责边界（5.5）：不主动截屏（除游戏实况调度官内部定时外），只响应命令调用。
 虚拟光标：输入层执行后经 EventBus 广播 screen:cursor_action，VirtualCursorManager
 订阅后更新双角色光标状态并渲染（Win32 覆盖窗口 + 前端事件）。
@@ -10,10 +13,10 @@ screen:cursor / screen:cursor_state。
 # 模块内容清单（8 项契约）
 1. 模块身份标识：screen · ScreenControlOrchestrator · 能力 screen:capture/click/keypress/execute_plan/move/scroll/drag/template_match/cursor/cursor_state
 2. 配置契约：vision_api_key 视觉模型密钥（可选）
-3. 输入契约：handle(command) 指令字典（capability + payload：region/window_title/x/y/key/plan/action/label/role/visible/template/threshold 等）
-4. 输出契约：{ok, data, error} 响应字典；execute_plan 返回逐步结果列表；cursor_state 返回光标状态
-5. 依赖声明：logging、typing、registry、capture、input、vision、template_match、virtual_cursor、cursor_overlay 模块
-6. 错误定义：截屏/点击/按键异常捕获并返回 error；x/y/key/plan 缺失返回 error
+3. 输入契约：handle(command) 指令字典（capability + payload：region/window_title/x/y/key/plan/action/label/role/visible/template/threshold/backend/bridge 等）
+4. 输出契约：{ok, data, error} 响应字典；execute_plan 返回逐步结果列表；cursor_state 返回光标状态；backend 注入返回实际后端（postmessage/bridge/sendinput）
+5. 依赖声明：logging、typing、registry、capture、input、input_backend、vision、template_match、virtual_cursor、cursor_overlay 模块
+6. 错误定义：截屏/点击/按键异常捕获并返回 error；x/y/key/plan 缺失返回 error；PostMessage 窗口未找到返回 error
 7. 生命周期方法：start()/stop()/health()；virtual_cursor 随 start/stop 启停
 8. 领域状态说明：_started 启动标记；_vision_api_key；capture/click/keypress/ocr/describe/move/scroll/drag/template_match 函数注入点；_virtual_cursor 虚拟光标管理器
 """
@@ -23,6 +26,7 @@ from typing import Any, Dict, List, Optional
 from src.orchestrators.screen_control_orchestrator import registry
 from src.orchestrators.screen_control_orchestrator import capture as capture_mod
 from src.orchestrators.screen_control_orchestrator import input as input_mod
+from src.orchestrators.screen_control_orchestrator import input_backend as input_backend_mod
 from src.orchestrators.screen_control_orchestrator import template_match as template_match_mod
 from src.orchestrators.screen_control_orchestrator import vision as vision_mod
 from src.orchestrators.screen_control_orchestrator.cursor_overlay import CursorOverlayWindow
@@ -127,11 +131,92 @@ class ScreenControlOrchestrator:
             logger.error("[ScreenControl] 截屏失败: %s", e)
             return {"ok": False, "data": {}, "error": str(e)}
 
+    def _use_backend(self, payload: Dict[str, Any]) -> bool:
+        """是否走分层注入后端：显式指定 backend 或提供 window_title（auto 目标窗口注入）。"""
+        if payload.get("backend") is not None:
+            return True
+        return bool(payload.get("window_title"))
+
+    def _dispatch_input(self, payload: Dict[str, Any],
+                        action: str) -> Dict[str, Any]:
+        """输入统一入口：backend=auto 时按 L1 PostMessage → L2 游戏桥 → L0 SendInput 分层。
+
+        payload 支持 backend=auto|postmessage|sendinput、window_title、bridge 参数。
+        sendinput 分支走注入的 *_fn（兼容测试/无显示器环境）；显式 postmessage
+        强制定向目标窗口，窗口未找到返回 error。
+        """
+        backend = payload.get("backend", "auto")
+        window_title = payload.get("window_title", "")
+        bridge = payload.get("bridge")
+        if backend not in ("auto", "postmessage", "sendinput"):
+            return {"ok": False, "error": f"未知 backend: {backend}"}
+        if backend == "auto":
+            r = input_backend_mod.dispatch(window_title, action, payload, bridge=bridge)
+            # postmessage/bridge 命中才直接返回；sendinput 兜底结果统一回落到注入 fn
+            # （真实运行时 *_fn == input_mod 实现，行为一致；测试/无显示器走 mock）
+            if r.get("ok") and r.get("data", {}).get("backend") != "sendinput":
+                return r
+        elif backend == "postmessage":
+            hwnd = input_backend_mod._find_hwnd(window_title)
+            if hwnd is None:
+                return {"ok": False, "error": f"窗口未找到: {window_title}"}
+            try:
+                ok = input_backend_mod._dispatch_post(hwnd, action, payload)
+                return {"ok": ok, "data": {"backend": "postmessage"},
+                        "error": None if ok else f"PostMessage 失败: {action}"}
+            except Exception as e:
+                return {"ok": False, "error": str(e)}
+        # sendinput / auto（无窗口）回落：走注入 fn
+        try:
+            ok, data = self._dispatch_sendinput_fn(action, payload)
+            return {"ok": ok, "data": dict(data, backend="sendinput"),
+                    "error": None if ok else f"sendinput 失败: {action}"}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def _dispatch_sendinput_fn(self, action: str,
+                               payload: Dict[str, Any]):
+        """SendInput 注入点分发（走 self.*_fn，兼容测试注入与无显示器环境）。"""
+        if action == "click":
+            ok = self.click_fn(int(payload.get("x", 0)), int(payload.get("y", 0)),
+                               payload.get("button", "left"))
+            return bool(ok), {"done": True}
+        if action == "double_click":
+            ok = self.double_click_fn(int(payload.get("x", 0)), int(payload.get("y", 0)),
+                                      payload.get("button", "left"))
+            return bool(ok), {"done": True}
+        if action == "keypress":
+            ok = self.keypress_fn(payload.get("key", ""),
+                                  int(payload.get("repeat", 1)))
+            return bool(ok), {"done": bool(ok)}
+        if action == "move":
+            ok = self.move_fn(int(payload.get("x", 0)), int(payload.get("y", 0)),
+                              float(payload.get("duration", 0.2)))
+            return bool(ok), {"done": True, "x": int(payload.get("x", 0)),
+                              "y": int(payload.get("y", 0))}
+        if action == "scroll":
+            ok = self.scroll_fn(int(payload.get("amount", 1)),
+                                payload.get("x"), payload.get("y"))
+            return bool(ok), {"done": True}
+        if action == "drag":
+            ok = self.drag_fn(int(payload.get("x1", 0)), int(payload.get("y1", 0)),
+                              int(payload.get("x2", 0)), int(payload.get("y2", 0)),
+                              float(payload.get("duration", 0.5)))
+            return bool(ok), {"done": True}
+        return False, {"error": f"未知动作: {action}"}
+
     def _click(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         x = payload.get("x")
         y = payload.get("y")
         if x is None or y is None:
             return {"ok": False, "data": {}, "error": "x/y 必填"}
+        if self._use_backend(payload):
+            r = self._dispatch_input(payload, "click")
+            if r.get("ok"):
+                self._broadcast_cursor("click", x, y, payload.get("label", "点击"))
+                return r
+            if payload.get("backend", "auto") != "auto":
+                return r
         try:
             self.click_fn(int(x), int(y), payload.get("button", "left"))
             self._broadcast_cursor("click", x, y, payload.get("label", "点击"))
@@ -143,6 +228,13 @@ class ScreenControlOrchestrator:
         key = payload.get("key")
         if not key:
             return {"ok": False, "data": {}, "error": "key 必填"}
+        if self._use_backend(payload):
+            r = self._dispatch_input(payload, "keypress")
+            if r.get("ok"):
+                self._broadcast_cursor("keypress", label=f"按键 {key}")
+                return r
+            if payload.get("backend", "auto") != "auto":
+                return r
         try:
             ok = self.keypress_fn(key, int(payload.get("repeat", 1)))
             if ok:
@@ -157,6 +249,13 @@ class ScreenControlOrchestrator:
         y = payload.get("y")
         if x is None or y is None:
             return {"ok": False, "data": {}, "error": "x/y 必填"}
+        if self._use_backend(payload):
+            r = self._dispatch_input(payload, "move")
+            if r.get("ok"):
+                self._broadcast_cursor("move", x, y, payload.get("label", "移动"))
+                return r
+            if payload.get("backend", "auto") != "auto":
+                return r
         try:
             ok = self.move_fn(int(x), int(y), float(payload.get("duration", 0.2)))
             self._broadcast_cursor("move", x, y, payload.get("label", "移动"))
@@ -170,6 +269,12 @@ class ScreenControlOrchestrator:
         amount = payload.get("amount")
         if amount is None:
             return {"ok": False, "data": {}, "error": "amount 必填"}
+        if self._use_backend(payload):
+            r = self._dispatch_input(payload, "scroll")
+            if r.get("ok"):
+                return r
+            if payload.get("backend", "auto") != "auto":
+                return r
         try:
             ok = self.scroll_fn(int(amount), payload.get("x"), payload.get("y"))
             return {"ok": ok, "data": {"done": True}, "error": None}
@@ -181,6 +286,14 @@ class ScreenControlOrchestrator:
         if payload.get("x1") is None or payload.get("y1") is None or \
                 payload.get("x2") is None or payload.get("y2") is None:
             return {"ok": False, "data": {}, "error": "x1/y1/x2/y2 必填"}
+        if self._use_backend(payload):
+            r = self._dispatch_input(payload, "drag")
+            if r.get("ok"):
+                self._broadcast_cursor("drag", payload["x2"], payload["y2"],
+                                       payload.get("label", "拖拽"))
+                return r
+            if payload.get("backend", "auto") != "auto":
+                return r
         try:
             ok = self.drag_fn(int(payload["x1"]), int(payload["y1"]),
                               int(payload["x2"]), int(payload["y2"]),
@@ -302,6 +415,13 @@ class ScreenControlOrchestrator:
         y = payload.get("y")
         if x is None or y is None:
             return {"ok": False, "data": {}, "error": "x/y 必填"}
+        if self._use_backend(payload):
+            r = self._dispatch_input(payload, "double_click")
+            if r.get("ok"):
+                self._broadcast_cursor("double_click", x, y, payload.get("label", "双击"))
+                return r
+            if payload.get("backend", "auto") != "auto":
+                return r
         try:
             ok = self.double_click_fn(int(x), int(y), payload.get("button", "left"))
             self._broadcast_cursor("double_click", x, y, payload.get("label", "双击"))

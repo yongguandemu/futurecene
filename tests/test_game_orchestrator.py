@@ -247,4 +247,5 @@ def test_op_act_success_no_retry_duplication():
     r = orch._op_act("advance", {})
     assert r["ok"] is True and r["scene_changed"] is True
     assert screen.calls == [{"capability": "screen:click",
-                             "payload": {"x": 960, "y": 940, "label": "推进"}}]
+                             "payload": {"window_title": "", "backend": "auto",
+                                         "x": 960, "y": 940, "label": "推进"}}]

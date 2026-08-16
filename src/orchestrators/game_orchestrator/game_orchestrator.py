@@ -239,55 +239,61 @@ class GameOrchestrator:
                 "image_path": data.get("image_path", "")}
 
     def _op_act(self, action: str, params: Dict[str, Any]) -> Dict[str, Any]:
-        """操作：经 screen 调度官命令调用执行，并广播虚拟光标。"""
+        """操作：经 screen 调度官命令调用执行，并广播虚拟光标。
+
+        P1 注入修复：透传 window_title + backend=auto，使输入经 input_backend
+        分层注入（L1 PostMessage 后台窗口 → L2 游戏桥 → L0 SendInput 前台兜底），
+        解决 SendInput 只投递前台窗口导致的注入阻塞。
+        """
         if self._screen is None:
             return {"ok": False, "scene_changed": False, "error": "screen not bound"}
+        base = {"window_title": self._op_window_title, "backend": "auto"}
         if action == "advance":
             r = self._call_screen("screen:click",
-                                  {"x": self._op_click_x, "y": self._op_click_y,
-                                   "label": "推进"})
+                                  dict(base, x=self._op_click_x, y=self._op_click_y,
+                                       label="推进"))
         elif action == "select_option":
-            r = self._call_screen("screen:keypress", {"key": "DOWN"})
+            r = self._call_screen("screen:keypress", dict(base, key="DOWN"))
             if r.get("ok"):
-                r = self._call_screen("screen:keypress", {"key": "ENTER"})
+                r = self._call_screen("screen:keypress", dict(base, key="ENTER"))
         elif action == "keypress":
             r = self._call_screen("screen:keypress",
-                                  {"key": params.get("key", ""), "label": "按键"})
+                                  dict(base, key=params.get("key", ""), label="按键"))
         elif action == "hold":
             r = self._call_screen("screen:keypress",
-                                  {"key": params.get("key", ""), "label": "按住"})
+                                  dict(base, key=params.get("key", ""), label="按住"))
         elif action == "release":
             r = self._call_screen("screen:keypress",
-                                  {"key": params.get("key", ""), "label": "松开"})
+                                  dict(base, key=params.get("key", ""), label="松开"))
         elif action == "click":
             r = self._call_screen("screen:click",
-                                  {"x": params.get("x"), "y": params.get("y"),
-                                   "button": params.get("button", "left"),
-                                   "label": "点击"})
+                                  dict(base, x=params.get("x"), y=params.get("y"),
+                                       button=params.get("button", "left"),
+                                       label="点击"))
         elif action == "double_click":
             r = self._call_screen("screen:double_click",
-                                  {"x": params.get("x"), "y": params.get("y"),
-                                   "button": params.get("button", "left"),
-                                   "label": "双击"})
+                                  dict(base, x=params.get("x"), y=params.get("y"),
+                                       button=params.get("button", "left"),
+                                       label="双击"))
         elif action == "move":
             r = self._call_screen("screen:move",
-                                  {"x": params.get("x"), "y": params.get("y"),
-                                   "duration": params.get("duration", 0.2),
-                                   "label": "移动"})
+                                  dict(base, x=params.get("x"), y=params.get("y"),
+                                       duration=params.get("duration", 0.2),
+                                       label="移动"))
         elif action == "drag":
             r = self._call_screen("screen:drag",
-                                  {"x1": params.get("x1"), "y1": params.get("y1"),
-                                   "x2": params.get("x2"), "y2": params.get("y2"),
-                                   "duration": params.get("duration", 0.5),
-                                   "label": "拖拽"})
+                                  dict(base, x1=params.get("x1"), y1=params.get("y1"),
+                                       x2=params.get("x2"), y2=params.get("y2"),
+                                       duration=params.get("duration", 0.5),
+                                       label="拖拽"))
         elif action == "scroll":
             r = self._call_screen("screen:scroll",
-                                  {"amount": params.get("amount", 1),
-                                   "x": params.get("x"), "y": params.get("y")})
+                                  dict(base, amount=params.get("amount", 1),
+                                       x=params.get("x"), y=params.get("y")))
         elif action == "type":
             r = self._call_screen("screen:keypress",
-                                  {"key": (params.get("text") or "")[:1],
-                                   "label": "输入"})
+                                  dict(base, key=(params.get("text") or "")[:1],
+                                       label="输入"))
         elif action == "capture":
             r = self._call_screen("screen:capture", {})
         elif action == "wait":

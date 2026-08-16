@@ -29,9 +29,9 @@ _extensions*/
 User Data*/
 
 # ===== 调试残留（根目录探测/检查脚本与截图） =====
-_*.py
-_*.js
-_*.mjs
+/_*.py
+/_*.js
+/_*.mjs
 _*.png
 screenshot*.png
 live2d_dom.html

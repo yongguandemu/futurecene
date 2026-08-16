@@ -18,7 +18,7 @@ for /f "delims=" %%v in ('python -c "import sys;print(sys.version.split()[0])" 2
 echo   检测到 Python %PYVER%
 
 echo [2/4] 检查项目依赖...
-python -c "import flask, openai, zhipuai, websockets, requests, mss, PIL" >nul 2>nul
+python -c "import flask, flask_sock, yaml, openai, zhipuai, websockets, requests, mss, PIL" >nul 2>nul
 if errorlevel 1 (
     echo   依赖缺失，正在安装 requirements.txt...
     pip install -r requirements.txt

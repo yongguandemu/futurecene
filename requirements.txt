@@ -1,6 +1,8 @@
 # 运行依赖
 flask>=3.0
+flask_sock>=0.7.0
 python-dotenv>=1.0
+PyYAML>=6.0
 openai>=2.0
 zhipuai>=2.1
 websockets>=12.0

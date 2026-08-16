@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      # CI 无真实密钥：占位非空值通过 config 必填校验（测试不真调外部 API）
+      OPENAI_API_KEY: ci-dummy-key
+      ZHIPU_API_KEY: ci-dummy-key
+      DASHSCOPE_API_KEY: ci-dummy-key
+      WUSOUND_API_KEY: ci-dummy-key
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 安装依赖
+        run: pip install -r requirements.txt
+
+      - name: 环境校验（核心依赖可导入）
+        run: |
+          python -c "import flask, flask_sock, yaml, openai, zhipuai, websockets, requests, mss, PIL, pytesseract; print('deps OK')"
+
+      - name: 运行测试
+        run: python -m pytest tests -q

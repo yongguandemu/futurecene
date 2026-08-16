@@ -11,7 +11,7 @@ __pycache__/
 *.egg-info/
 
 # ===== 运行时数据 =====
-data/
+data/*
 !data/.gitkeep
 !data/worldbook.json
 

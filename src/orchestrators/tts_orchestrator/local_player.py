@@ -23,6 +23,8 @@
 ## 4. 输出契约
 - 成功：winsound.PlaySound 播放缓存音频（SND_FILENAME | SND_ASYNC 异步）
 - 失败：文件缺失/播放异常 → warning 日志，不抛错、不影响事件链
+- 格式守卫：播放前校验 WAV 头（RIFF）；MP3 等非 WAV 文件跳过并 warning
+  （修复：winsound 播放失败会触发 Windows 系统提示音）
 - 事件：无（纯消费者）
 
 ## 5. 依赖声明
@@ -88,8 +90,21 @@ class LocalTTSSpeaker:
         if not path.exists():
             logger.warning("[LocalTTSSpeaker] 音频文件不存在: %s", path)
             return
+        if not self._is_wav(path):
+            logger.warning("[LocalTTSSpeaker] 跳过非 WAV 音频（winsound 仅支持 WAV）: %s", path.name)
+            return
         threading.Thread(target=self._play, args=(path,), daemon=True,
                          name="local-tts-play").start()
+
+    @staticmethod
+    def _is_wav(path: Path) -> bool:
+        """校验文件为真实 WAV（RIFF 头）。修复：MP3 伪装 .wav 时 winsound
+        播放失败会触发 Windows 系统提示音。"""
+        try:
+            with open(path, "rb") as f:
+                return f.read(4) == b"RIFF"
+        except OSError:
+            return False
 
     def _play(self, path: Path) -> None:
         try:

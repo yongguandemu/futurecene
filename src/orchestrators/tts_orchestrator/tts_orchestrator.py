@@ -168,18 +168,30 @@ class TTSOrchestrator:
         """用指定引擎合成到缓存目录；命中缓存直接复用。
 
         返回 (audio_id, path, duration_ms)；失败返回 (None, None, 0)。
+        缓存文件名按真实格式后缀（.wav/.mp3）：引擎返回 MP3（ffmpeg 缺失回退）
+        时不再伪装成 .wav，避免本地播放/格式识别失败（修复：TTS 提示音）。
+        兼容旧缓存：命中探测 .wav/.mp3 两种后缀，任一中即复用。
         """
-        key = self._cache_key(text, voice)
-        audio_path = self._cache_dir / key
-        if audio_path.exists():
-            logger.debug("[TTSOrchestrator] 缓存命中: %s", key)
-            return key, audio_path, self._duration_from_file(audio_path)
+        # 1. 缓存探测（wav/mp3 双后缀；旧版伪 .wav 文件也会命中 wav 分支）
+        for fmt in ("wav", "mp3"):
+            key = self._cache_key(text, voice, fmt)
+            audio_path = self._cache_dir / key
+            if audio_path.exists():
+                logger.debug("[TTSOrchestrator] 缓存命中: %s", key)
+                return key, audio_path, self._duration_from_file(audio_path, fmt)
+        # 2. 未命中：合成（真实格式决定后缀）
         try:
             audio, sample_rate, fmt = self._client_synthesize(client, text, voice)
         except Exception as e:
             logger.error("[TTSOrchestrator] 合成失败: %s", e)
             return None, None, 0
-        audio_path.write_bytes(audio)
+        key = self._cache_key(text, voice, fmt)
+        audio_path = self._cache_dir / key
+        try:
+            audio_path.write_bytes(audio)
+        except Exception as e:
+            logger.error("[TTSOrchestrator] 写入缓存失败: %s", e)
+            return None, None, 0
         duration_ms = self._duration(audio, sample_rate, fmt)
         logger.info("[TTSOrchestrator] 合成完成: %s (%d bytes, %dms, %s)",
                     key, len(audio), duration_ms, fmt)
@@ -194,11 +206,11 @@ class TTSOrchestrator:
         return client.synthesize(text, voice_id=voice)
 
     @staticmethod
-    def _cache_key(text: str, voice: str) -> str:
-        """缓存文件名（text+voice 哈希，含引擎无关的音色区分）。"""
+    def _cache_key(text: str, voice: str, fmt: str = "wav") -> str:
+        """缓存文件名（text+voice 哈希 + 真实格式后缀；fmt ∈ wav/mp3）。"""
         import hashlib
         digest = hashlib.sha256(f"{voice}:{text}".encode("utf-8")).hexdigest()[:16]
-        return f"tts_{digest}.wav"
+        return f"tts_{digest}.{fmt}"
 
     @staticmethod
     def _duration(audio: bytes, sample_rate: int, fmt: str) -> int:
@@ -208,10 +220,13 @@ class TTSOrchestrator:
             return max(300, int(data_len / 2 / max(int(sample_rate or 24000), 1) * 1000))
         return max(300, int(len(audio) / 16))  # mp3 ≈ 16 bytes/ms
 
-    def _duration_from_file(self, audio_path: Path) -> int:
-        """缓存命中时按文件字节估算时长（采样率未知按 24k）。"""
+    def _duration_from_file(self, audio_path: Path, fmt: str = "wav") -> int:
+        """缓存命中时按文件字节估算时长（采样率未知按 24k；mp3 按 16KB/s 估算）。"""
         try:
-            return self._duration(audio_path.read_bytes(), 24000, "wav")
+            data = audio_path.read_bytes()
+            if fmt == "mp3" or not data.startswith(b"RIFF"):
+                return self._duration(data, 24000, "mp3")
+            return self._duration(data, 24000, "wav")
         except OSError:
             return 500
 
@@ -246,7 +261,8 @@ class TTSOrchestrator:
         cutoff = time.time() - max_age_hours * 3600
         cleaned = 0
         freed = 0
-        for f in self._cache_dir.glob("tts_*.wav"):
+        for f in list(self._cache_dir.glob("tts_*.wav")) + \
+                 list(self._cache_dir.glob("tts_*.mp3")):
             try:
                 stat = f.stat()
                 if stat.st_mtime < cutoff:

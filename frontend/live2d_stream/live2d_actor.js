@@ -15,12 +15,13 @@
   "use strict";
 
   // 角色 → 模型配置（与 config.yaml roles 对应；无后端时前端兜底）
+  // 受限人设：restrictBreath=true 抑制呼吸幅度/频率（刚被唤醒的 AI 实习生，双角色统一）
   var ROLES = window.__ROLES || [
     { name: "yuki", model: "Hiyori", restrictBreath: true, idleSilent: "Hiyori_m03",
       x: 0.25,
       expressionMap: {}, motionMap: { wave: "Hiyori_m01", nod: "Hiyori_m02",
         shake: "Hiyori_m05", idle: "Hiyori_m01" } },
-    { name: "lilith", model: "Haru", restrictBreath: false, idleSilent: "idle",
+    { name: "lilith", model: "Haru", restrictBreath: true, idleSilent: "idle",
       x: 0.55,
       expressionMap: { 开心: "唱歌", 难过: "流泪", 惊讶: "头发", 害羞: "嘟嘴", 生气: "脸黑", 平静: "头发" },
       motionMap: { wave: "wave", nod: "nod", shake: "shake", idle: "idle" } }

@@ -8,7 +8,8 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # 本项目为 Windows 专用（ctypes.windll / winsound / mss 等平台依赖）
+    runs-on: windows-latest
     env:
       # CI 无真实密钥：占位非空值通过 config 必填校验（测试不真调外部 API）
       OPENAI_API_KEY: ci-dummy-key

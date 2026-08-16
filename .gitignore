@@ -42,3 +42,7 @@ node_modules/
 *.pptx
 角色资源储存/
 
+# ===== 工具产物（html-report 输出等，不入库） =====
+.trae-html-share-packages/
+game-live-low-latency-plan/
+

@@ -1,60 +1,59 @@
 @echo off
-chcp 65001 >nul
 title Future Scene - Demo Launcher
 cd /d "%~dp0"
 
 echo ============================================================
-echo   Future Scene Â· æ™ºèƒ½è™šæ‹Ÿè§’è‰²è‡ªä¸»ç›´æ’­ç³»ç»Ÿ - æœ¬åœ°æ¼”ç¤ºå¯åŠ¨
+echo   Future Scene ¡¤ ÖÇÄÜÐéÄâ½ÇÉ«×ÔÖ÷Ö±²¥ÏµÍ³ - ±¾µØÑÝÊ¾Æô¶¯
 echo ============================================================
 echo.
 
-echo [1/4] æ£€æŸ¥ Python çŽ¯å¢ƒ...
+echo [1/4] ¼ì²é Python »·¾³...
 where python >nul 2>nul
 if errorlevel 1 (
-    echo   æœªæ‰¾åˆ° Pythonï¼Œè¯·å…ˆå®‰è£… Python 3.10 åŠä»¥ä¸Šç‰ˆæœ¬ï¼ˆå‹¾é€‰ Add to PATHï¼‰ã€‚
+    echo   Î´ÕÒµ½ Python£¬ÇëÏÈ°²×° Python 3.10 ¼°ÒÔÉÏ°æ±¾£¨¹´Ñ¡ Add to PATH£©¡£
     pause
     exit /b 1
 )
 for /f "delims=" %%v in ('python -c "import sys;print(sys.version.split()[0])" 2^>nul') do set PYVER=%%v
-echo   æ£€æµ‹åˆ° Python %PYVER%
+echo   ¼ì²âµ½ Python %PYVER%
 
-echo [2/4] æ£€æŸ¥é¡¹ç›®ä¾èµ–...
+echo [2/4] ¼ì²éÏîÄ¿ÒÀÀµ...
 python -c "import flask, openai, zhipuai, websockets, requests, mss, PIL" >nul 2>nul
 if errorlevel 1 (
-    echo   ä¾èµ–ç¼ºå¤±ï¼Œæ­£åœ¨å®‰è£… requirements.txt...
+    echo   ÒÀÀµÈ±Ê§£¬ÕýÔÚ°²×° requirements.txt...
     pip install -r requirements.txt
     if errorlevel 1 (
-        echo   ä¾èµ–å®‰è£…å¤±è´¥ï¼Œè¯·æ£€æŸ¥ç½‘ç»œåŽé‡è¯•ã€‚
+        echo   ÒÀÀµ°²×°Ê§°Ü£¬Çë¼ì²éÍøÂçºóÖØÊÔ¡£
         pause
         exit /b 1
     )
 )
-echo   ä¾èµ–å°±ç»ª
+echo   ÒÀÀµ¾ÍÐ÷
 
-echo [3/4] æ£€æŸ¥ .env é…ç½®...
+echo [3/4] ¼ì²é .env ÅäÖÃ...
 if not exist .env (
     copy .env.example .env >nul
-    echo   å·²ç”Ÿæˆ .env æ¨¡æ¿ã€‚
-    echo   >>> è¯·æ‰“å¼€ .env å¡«å†™ API Keyï¼ˆOPENAI_API_KEY / ZHIPU_API_KEY / DASHSCOPE_API_KEY ç­‰ï¼‰ï¼Œ
-    echo   >>> ä¿å­˜åŽé‡æ–°åŒå‡»æœ¬è„šæœ¬å¯åŠ¨ã€‚ç¼ºå¤± Key æ—¶æœåŠ¡å°†æ— æ³•é€šè¿‡çŽ¯å¢ƒæ ¡éªŒã€‚
+    echo   ÒÑÉú³É .env Ä£°å¡£
+    echo   [ÌáÊ¾] Çë´ò¿ª .env ÌîÐ´ API Key£¨OPENAI_API_KEY / ZHIPU_API_KEY / DASHSCOPE_API_KEY µÈ£©£¬
+    echo   [ÌáÊ¾] ±£´æºóÖØÐÂË«»÷±¾½Å±¾Æô¶¯¡£È±Ê§ Key Ê±·þÎñ½«ÎÞ·¨Í¨¹ý»·¾³Ð£Ñé¡£
     pause
     exit /b 1
 )
-echo   .env å·²å­˜åœ¨
+echo   .env ÒÑ´æÔÚ
 
-echo [4/4] æ£€æŸ¥æœåŠ¡æ˜¯å¦å·²åœ¨è¿è¡Œï¼ˆç«¯å£ 5000ï¼‰...
+echo [4/4] ¼ì²é·þÎñÊÇ·ñÒÑÔÚÔËÐÐ£¨¶Ë¿Ú 5000£©...
 netstat -ano | findstr ":5000 " | findstr "LISTENING" >nul 2>nul
 if not errorlevel 1 (
-    echo   æ£€æµ‹åˆ°æœåŠ¡å·²åœ¨è¿è¡Œï¼ˆç«¯å£ 5000 è¢«ç›‘å¬ï¼‰ï¼Œç›´æŽ¥æ‰“å¼€æŽ§åˆ¶å°ï¼Œæ— éœ€é‡å¤å¯åŠ¨ã€‚
+    echo   ¼ì²âµ½·þÎñÒÑÔÚÔËÐÐ£¨¶Ë¿Ú 5000 ±»¼àÌý£©£¬Ö±½Ó´ò¿ª¿ØÖÆÌ¨£¬ÎÞÐèÖØ¸´Æô¶¯¡£
     start "" "http://127.0.0.1:5000/dashboard/"
     pause
     exit /b 0
 )
-echo   ç«¯å£ç©ºé—²ï¼Œå¯åŠ¨æœåŠ¡ï¼Œæµè§ˆå™¨å°†è‡ªåŠ¨æ‰“å¼€æŽ§åˆ¶å°...
-echo   åœæ­¢æœåŠ¡ï¼šåœ¨çª—å£æŒ‰ Ctrl+C
+echo   ¶Ë¿Ú¿ÕÏÐ£¬Æô¶¯·þÎñ£¬ä¯ÀÀÆ÷½«×Ô¶¯´ò¿ª¿ØÖÆÌ¨...
+echo   Í£Ö¹·þÎñ£ºÔÚ´°¿Ú°´ Ctrl+C
 echo.
 python run.py
 
 echo.
-echo æœåŠ¡å·²é€€å‡ºã€‚
+echo ·þÎñÒÑÍË³ö¡£
 pause

@@ -65,6 +65,65 @@ def test_cache_hit_skips_client(tmp_path):
     assert client.calls == 1  # 第二次命中缓存，不重复合成
 
 
+def test_mp3_fallback_named_with_mp3_suffix(tmp_path):
+    """修复：引擎返回 MP3（ffmpeg 缺失回退）时按 .mp3 后缀命名，不再伪装 .wav。"""
+    class Mp3Client:
+        engine_name = "mp3"
+
+        def synthesize(self, text, voice_id=None):
+            return b"ID3fake-mp3-bytes", 24000, "mp3"
+
+    orch, bus = _make(tmp_path, client=Mp3Client())
+    seen = {}
+    bus.subscribe(TTS_AUDIO_READY, lambda event, **kw: seen.update(kw))
+    r = asyncio.run(orch.handle({"capability": "tts:synthesize",
+                                 "payload": {"text": "mp3测试", "role": "yuki"}}))
+    assert r["ok"] is True
+    assert r["data"]["audio_id"].endswith(".mp3")
+    assert (tmp_path / "tts_cache" / r["data"]["audio_id"]).exists()
+    assert seen["audio_id"].endswith(".mp3")
+
+
+def test_cache_probe_both_suffixes(tmp_path):
+    """缓存命中探测 wav/mp3 双后缀：先落 .mp3 再合成同文本不重复调用。"""
+    class Mp3Client:
+        engine_name = "mp3"
+
+        def synthesize(self, text, voice_id=None):
+            return b"ID3probe", 24000, "mp3"
+
+    client = Mp3Client()
+    orch, _ = _make(tmp_path, client=client)
+    payload = {"text": "双后缀", "role": "yuki"}
+    asyncio.run(orch.handle({"capability": "tts:synthesize", "payload": payload}))
+    # 再合成一次同文本：应命中 .mp3 缓存，不重复调用
+    r2 = asyncio.run(orch.handle({"capability": "tts:synthesize", "payload": payload}))
+    assert r2["ok"] is True
+    assert r2["data"]["audio_id"].endswith(".mp3")
+
+
+def test_cache_clean_covers_mp3(tmp_path):
+    """缓存清理覆盖 .mp3 后缀（不再只清 .wav）。"""
+    class Mp3Client:
+        engine_name = "mp3"
+
+        def synthesize(self, text, voice_id=None):
+            return b"ID3clean", 24000, "mp3"
+
+    orch, _ = _make(tmp_path, client=Mp3Client())
+    r1 = asyncio.run(orch.handle({"capability": "tts:synthesize",
+                                  "payload": {"text": "清理mp3", "role": "yuki"}}))
+    assert r1["ok"] is True
+    # 拨回缓存文件 mtime，避免文件系统时间精度导致的清理竞态（CI 偶发 cleaned=0）
+    old = time.time() - 10
+    for f in (tmp_path / "tts_cache").glob("tts_*.mp3"):
+        os.utime(f, (old, old))
+    r = asyncio.run(orch.handle({"capability": "tts:cache_clean",
+                                 "payload": {"max_age_hours": 0}}))
+    assert r["ok"] is True
+    assert r["data"]["cleaned"] >= 1
+
+
 def test_synthesize_failure_publishes_failed(tmp_path):
     orch, bus = _make(tmp_path, client=FakeTTSClient(fail=True))
     seen = {}

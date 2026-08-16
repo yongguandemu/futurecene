@@ -3,8 +3,8 @@
 职责边界（ADR-005）：只做 LLM API 调用封装（流式、重试、降级、成本统计）。
 不包含：人格组装（system_prompt 由指挥官注入）、记忆注入、意图路由。
 
-引擎路由（成本控制，ADR-006）：payload.engine 决定降级链——
-- "fast"（日常对话/弹幕/主动话题）：zhipu(GLM-4.7-FlashX) → openai(DeepSeek) → 本地兜底
+引擎路由（成本控制，ADR-006 实测修正）：payload.engine 决定降级链——
+- "fast"（日常对话/弹幕/主动话题）：openai(DeepSeek V4 Flash) → zhipu → 本地兜底
 - "pro"/缺省（复杂 Agent：游戏规划等）：openai(DeepSeek V4 Pro) → zhipu → 本地兜底
 缺省 pro 保证向后兼容与安全（贵但不会错）；对话调用方显式传 fast 声明低延迟意图。
 全链失败发布 llm:failed。
@@ -54,6 +54,7 @@ class LLMOrchestrator:
         self._clients = clients or {}  # {"openai": client, "zhipu": client}（测试注入）
         self._config_loader = config_loader  # ConfigLoader（密钥从 config.yaml 占位符解析）
         self._primary: Optional[Any] = None
+        self._primary_fast: Optional[Any] = None  # fast 引擎专用（DeepSeek V4 Flash）
         self._fallback: Optional[Any] = None
         self._started = False
         self._last_error: Optional[str] = None
@@ -81,10 +82,30 @@ class LLMOrchestrator:
             model=openai_cfg.get("model") or os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
             timeout=float(os.environ.get("OPENAI_TIMEOUT", "12")),
         )
+        # fast 引擎专用客户端：DeepSeek V4 Flash（免费且快，日常对话/弹幕）。
+        # 实测 zhipu 在网络不佳时 12s+ 才返回且必超时，而 flash 8s 内返回，故 fast 改用
+        # DeepSeek V4 Flash 优先，zhipu 降级兜底（config llm.openai.model_fast / OPENAI_MODEL_FAST）。
+        fast_model = (openai_cfg.get("model_fast")
+                      or os.environ.get("OPENAI_MODEL_FAST", ""))
+        self._primary_fast = None
+        if fast_model:
+            self._primary_fast = OpenAIClient(
+                api_key=openai_cfg.get("api_key") or os.environ.get("OPENAI_API_KEY", ""),
+                base_url=openai_cfg.get("base_url")
+                or os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1/"),
+                model=fast_model,
+                timeout=float(os.environ.get("OPENAI_TIMEOUT", "12")),
+            )
         self._fallback = self._clients.get("zhipu") or GLMClient(
             api_key=zhipu_cfg.get("api_key") or os.environ.get("ZHIPU_API_KEY", ""),
             model=zhipu_cfg.get("model") or os.environ.get("ZHIPU_MODEL", "glm-4.7-flash"),
-            timeout=float(os.environ.get("ZHIPU_TIMEOUT", "8")),
+            # config zhipu.timeout 优先（当前 6s），回退环境变量/默认 8s：
+            # 修复超时配置不生效导致 zhipu 白等重试、降级叠加 20s+ 的慢响应
+            timeout=float(zhipu_cfg.get("timeout")
+                          or os.environ.get("ZHIPU_TIMEOUT", "8")),
+            # 降级链本身即兜底：zhipu 失败立即降级 openai，不再内部重试叠加延迟
+            # （旧默认 max_retries=1 会在超时后再重试一次，单引擎白等 16s+）
+            max_retries=int(zhipu_cfg.get("max_retries", 0)),
         )
         # 线程级调用超时（config.yaml llm.<engine>.timeout 优先，回退环境变量/默认）
         self._timeouts = {
@@ -94,8 +115,10 @@ class LLMOrchestrator:
                             or os.environ.get("OPENAI_TIMEOUT", "15")),
         }
         self._started = True
-        logger.info("[LLMOrchestrator] 已启动：primary=openai fallback=zhipu "
-                    "timeouts=%s", self._timeouts)
+        logger.info("[LLMOrchestrator] 已启动：primary=openai(pro=%s) fast=%s fallback=zhipu "
+                    "timeouts=%s",
+                    getattr(self._primary, "model", "?"),
+                    fast_model or "none", self._timeouts)
 
     async def handle(self, command: Dict[str, Any]) -> Dict[str, Any]:
         capability = command.get("capability", "")
@@ -149,11 +172,13 @@ class LLMOrchestrator:
     def _engine_chain(self, engine: str):
         """按路由模式返回 (client, engine_name) 降级链。
 
-        fast：zhipu(GLM-FlashX) 优先 → openai(DeepSeek) 兜底；
+        fast：openai(DeepSeek V4 Flash) 优先 → zhipu 兜底；
         pro/其他：openai(DeepSeek V4 Pro) 优先 → zhipu 兜底。
+        （实测调优：zhipu 网络不佳时必超时，故 fast 也以 DeepSeek Flash 为主引擎）
         """
         if engine == ROUTE_FAST:
-            return ((self._fallback, "zhipu"), (self._primary, "openai"))
+            return ((self._primary_fast or self._primary, "openai"),
+                    (self._fallback, "zhipu"))
         return ((self._primary, "openai"), (self._fallback, "zhipu"))
 
     def _chat(self, payload: Dict[str, Any]) -> Dict[str, Any]:

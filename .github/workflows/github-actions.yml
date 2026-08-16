@@ -33,3 +33,22 @@ jobs:
 
       - name: 运行测试
         run: python -m pytest tests -q
+
+  smoke:
+    # 冒烟自检（环境探测层 L0）：CI 无真实密钥/服务，仅验证环境依赖可探测。
+    # 完整冒烟（L0+L1+L2 真实链路）在本机验收前运行：
+    #   python scripts/smoke_test.py
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 安装依赖
+        run: pip install -r requirements.txt
+
+      - name: 冒烟自检（环境探测）
+        run: python scripts/smoke_test.py --check-env

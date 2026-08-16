@@ -5,19 +5,24 @@
 # ============================================================
 
 llm:
-  # 引擎路由（ADR-006 成本控制）：payload.engine 决定降级链
-  # - "fast"（日常对话/弹幕/主动话题）：zhipu(GLM-4.7-FlashX) 优先 → openai 兜底
+  # 引擎路由（ADR-006 成本控制 + 实测修正）：payload.engine 决定降级链
+  # - "fast"（日常对话/弹幕/主动话题）：openai(DeepSeek V4 Flash) 优先 → zhipu 兜底
+  #   实测 zhipu 在你网络下 12s+ 才返回且必超时，而 deepseek-v4-flash 免费且 8s 内返回，
+  #   故 fast 改用 DeepSeek V4 Flash 优先（2026-07 实测调优）
   # - "pro"/缺省（复杂 Agent：游戏操作规划等）：openai(DeepSeek V4 Pro) 优先 → zhipu 兜底
   openai:
     api_key: ${{ env.OPENAI_API_KEY }}      # DeepSeek V4 Pro（pro 引擎主力，Agent 复杂任务）
     base_url: ${{ env.OPENAI_BASE_URL }}    # https://api.deepseek.com/v1
-    model: ${{ env.OPENAI_MODEL }}          # deepseek-v4-pro
+    model: ${{ env.OPENAI_MODEL }}          # deepseek-v4-pro（pro 引擎）
+    model_fast: deepseek-v4-flash           # fast 引擎：日常对话用 DeepSeek V4 Flash（免费且快）。
+                                            # 明文默认值（非密钥，同 voice_id），可选 env 覆盖：OPENAI_MODEL_FAST
+    timeout: 15           # 单次调用线程级超时（秒）：config.yaml 曾误写重复 openai 键
+                          # （YAML 后者覆盖前者会丢 api_key/base_url/model），已合并为单一键
   zhipu:
-    api_key: ${{ env.ZHIPU_API_KEY }}       # 智谱 API Key（fast 引擎主力，日常对话/弹幕互动）
+    api_key: ${{ env.ZHIPU_API_KEY }}       # 智谱 API Key（降级引擎：fast/pro 均作兜底）
     model: ${{ env.ZHIPU_MODEL }}           # glm-4.7-flashx（轻量高速版，付费保吞吐，与 .env 保持一致）
-    timeout: 6           # 单次调用线程级超时（秒）：SDK 自带超时不可靠时兜底，超时立即降级
-  openai:
-    timeout: 15          # 单次调用线程级超时（秒）
+    timeout: 4           # 单次调用线程级超时（秒）：zhipu 网络不可用时快速失败降级 openai，
+                         # 避免白等叠加（实测 zhipu 超时 6s + openai 生成 12s = 18s+ 慢响应）
   active_dialogue:
     enabled: false        # 主动对话总开关（默认开）。开着会定时调 LLM+TTS，消耗积分，测试期建议关闭。
 

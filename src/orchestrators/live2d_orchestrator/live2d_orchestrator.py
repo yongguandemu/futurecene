@@ -1,10 +1,11 @@
 """live2d_orchestrator.py — Live2D 调度官主类（规格书 5.4）
 
-能力：live2d:load / expression / motion / lip_sync。
+能力：live2d:load / expression / motion / lip_sync / emotion / params_update。
 - 后端只维护状态机 + 事件（前端 PixiJS 经 WS 渲染，规格书 8.1 live2d_stream/）
 - 表达领域协作（规格书 3.4/5.5）：订阅 tts:audio_ready 自动触发口型同步
 - 多角色：_models 按 role 保存独立模型状态；LIVE2D_* 事件均携带 role；
   tts:audio_ready 按 role 路由口型（口型结束线程按 role 隔离）
+- 任务三：本地模型驱动（emotion 情绪提取 + params_update 批量参数帧 + 参数注册表）
 - 发布 LIVE2D_* 事件 + FRONTEND_STATUS_UPDATE（供前端 WS 转发控制指令）
 
 # 模块内容清单（8 项契约）
@@ -24,12 +25,14 @@ from typing import Any, Dict, List, Optional
 
 from src.orchestrators.live2d_orchestrator import registry
 from src.shared.events import (
+    EMOTION_EXTRACTED,
     FRONTEND_STATUS_UPDATE,
     LIVE2D_EXPRESSION_CHANGED,
     LIVE2D_LOADED,
     LIVE2D_LIP_SYNC_END,
     LIVE2D_LIP_SYNC_START,
     LIVE2D_MOTION_TRIGGERED,
+    LIVE2D_PARAMS_BATCH,
     TTS_AUDIO_READY,
 )
 
@@ -51,6 +54,15 @@ class Live2DOrchestrator:
         self._models: Dict[str, Dict[str, Any]] = {}   # role -> ModelState
         self._lip_threads: Dict[str, threading.Thread] = {}
         self._started = False
+        # 任务三：本地模型驱动子模块（参数注册表/情绪提取/参数映射/时序协调）
+        from src.orchestrators.live2d_orchestrator.parameter_registry import ParameterRegistry
+        from src.orchestrators.live2d_orchestrator.emotion_extractor import EmotionExtractor
+        from src.orchestrators.live2d_orchestrator.parameter_mapper import ParameterMapper
+        from src.orchestrators.live2d_orchestrator.timing_controller import TimingController
+        self._registry = ParameterRegistry()
+        self._emotion = EmotionExtractor()
+        self._mapper = ParameterMapper(registry=self._registry)
+        self._timing = TimingController()
         registry.bind(self.handle)
 
     def capabilities(self) -> List[str]:
@@ -75,6 +87,10 @@ class Live2DOrchestrator:
             return self._motion_trigger(payload)
         if capability == "live2d:lip_sync":
             return self._lip_sync(payload)
+        if capability == "live2d:emotion":
+            return self._emotion_change(payload)
+        if capability == "live2d:params_update":
+            return self._params_update(payload)
         return {"ok": False, "data": {}, "error": f"unknown capability: {capability}"}
 
     def health(self) -> Dict[str, Any]:
@@ -136,6 +152,32 @@ class Live2DOrchestrator:
         self._event_bus.publish(LIVE2D_MOTION_TRIGGERED, motion=motion, role=role)
         self._push_status()
         return {"ok": True, "data": {"triggered": True}, "error": None}
+
+    def _emotion_change(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """文本 → 情绪提取 + 参数映射 + 事件发布（任务三）。"""
+        role = payload.get("role", DEFAULT_ROLE)
+        st = self._state(role)
+        if st["model"] is None:
+            return {"ok": False, "data": {}, "error": "模型未加载，请先 live2d:load"}
+        result = self._emotion.extract(payload.get("text", ""))
+        emotion = result["emotion"]
+        params = self._mapper.map(emotion, model=st["model"])
+        st["emotion"] = emotion
+        st["params"] = params
+        self._event_bus.publish(EMOTION_EXTRACTED, emotion=emotion,
+                                score=result["score"], role=role, params=params)
+        self._push_status()
+        return {"ok": True, "data": {"emotion": emotion, "params": params}, "error": None}
+
+    def _params_update(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """批量参数帧（10Hz 聚合）：更新状态 + 发布 live2d:params_batch。"""
+        role = payload.get("role", DEFAULT_ROLE)
+        st = self._state(role)
+        params = payload.get("params", {}) or {}
+        st.setdefault("params", {}).update(params)
+        self._event_bus.publish(LIVE2D_PARAMS_BATCH, role=role,
+                                params=dict(params), ts=payload.get("ts", 0.0))
+        return {"ok": True, "data": {"applied": len(params)}, "error": None}
 
     def _lip_sync(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self._start_lip_sync(payload.get("role", DEFAULT_ROLE),

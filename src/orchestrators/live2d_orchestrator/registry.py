@@ -23,6 +23,8 @@ HANDLERS = {
     "live2d:expression": [object],
     "live2d:motion": [object],
     "live2d:lip_sync": [object],
+    "live2d:emotion": [object],        # 文本 → 情绪 + 参数（任务三）
+    "live2d:params_update": [object],  # 批量参数帧（任务三）
 }
 
 _repo = CapabilityRegistry(HANDLERS)

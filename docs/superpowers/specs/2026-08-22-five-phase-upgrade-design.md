@@ -216,11 +216,11 @@ src/orchestrators/memory_orchestrator/
 运营可读的设置/用量/角色配置/直播间预览；记忆与世界书审阅流持久化。
 
 ### 5.2 设置面板（/api/config）
-- 设置项（ConfigLoader 持久化 + 新路由读写）：
-  - `memory_strength`：low/medium/high/ultra → MemoryRetriever k 与频率
-  - `local_tts_playback`：TTS 输出目标（本机 vs 推流）
-  - `allow_memory_to_worldbook`：默认 off（短期内不开）
-  - `reasoning_intensity`：max_tokens/temperature 映射
+- 设置项（ConfigLoader 持久化 + 新路由读写；用户定稿：保留 4 项 + 语义细化，直播节奏等新项不设计）：
+  - `memory_strength`：low/medium/high/ultra → MemoryRetriever k（2/5/10/15）与检索频率
+  - `tts_output_target`：local（本机扬声器）/ stream（直播间推流）/ both（两者）——替代单布尔开关
+  - `allow_memory_to_worldbook`：默认 off（关=不生成 L3→世界书提案；开=生成提案走 MemoryReview 人工审阅，非直接写入）
+  - `reasoning_intensity`：省电（flash、短回复）/ 标准（flash、正常）/ 增强（pro、长回复、低温度）——映射 `engine + max_tokens + temperature`，不碰记忆压缩等后台任务
 - 新路由：`GET/PUT /api/config`（web/routes/config.py）
 
 ### 5.3 用量监控（/api/metrics）

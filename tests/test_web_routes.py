@@ -116,6 +116,20 @@ def test_command_target_role_prefixed_to_parser():
     assert parser.parsed_texts[-1] == "你好呀"
 
 
+def test_command_publishes_input_classified():
+    """总控调度化：POST /api/command 发布 input:classified（operator 身份标记）。"""
+    from src.shared.events import INPUT_CLASSIFIED
+    ctx = _make_context()
+    app = create_app(ctx)
+    seen = {}
+    ctx["event_bus"].subscribe(INPUT_CLASSIFIED, lambda event, **kw: seen.update(kw))
+    client = app.test_client()
+    resp = client.post("/api/command", json={"text": "你好"})
+    assert resp.status_code == 200
+    assert seen.get("input_type") == "operator"
+    assert seen.get("operator_id") == "user"
+
+
 def test_command_switch_role_internal():
     app = create_app(_make_context())
     client = app.test_client()

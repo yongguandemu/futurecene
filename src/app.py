@@ -208,6 +208,19 @@ def build_app_context():
                                tool_registry=tool_registry)
     pipeline.start()
 
+    # ---------- input 域（总控调度化，规格 2026-08-22 任务一） ----------
+    from src.commander.input import (
+        InputClassifier, PriorityQueue, DistributionRouter, ContextAggregator)
+    input_classifier = InputClassifier()
+    input_queue = PriorityQueue()
+    distribution_router = DistributionRouter(
+        intent_parser=intent_parser, command_router=command_router,
+        danmaku_pipeline=pipeline, event_bus=event_bus)
+    context_aggregator = ContextAggregator(
+        memory=memory_orch, session=session, event_bus=event_bus)
+    # 总控分发模式开关：默认关（direct 直通，现有链路不变）；开 = priority 排队
+    switch_manager.auto_register("input_dispatch", default=False)
+
     # ---------- 日程触发分发（P0 补迁）：schedule:fired → 指挥官命令分发 ----------
     # 排期到点时 ScheduleOrchestrator 只发事件；此处由装配层订阅并把动作
     # 投递给指挥官，经正常命令分发链（command_router → 调度官 handle）执行。

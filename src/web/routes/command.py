@@ -45,6 +45,20 @@ def command():
     if target_role:
         text = "@{} {}".format(target_role, text)
 
+    # input 域：operator 输入分类（总控调度化，P1 直通接线——行为不变，仅发布事件）
+    try:
+        from src.commander.input import InputClassifier
+        from src.shared.events import INPUT_CLASSIFIED
+        env = InputClassifier().classify(text=text, source="command",
+                                         operator_id="user")
+        event_bus = context.get("event_bus")
+        if event_bus is not None:
+            event_bus.publish(INPUT_CLASSIFIED, input_type=env.input_type,
+                              priority=env.priority, source=env.source,
+                              operator_id=env.operator_id, loop_depth=env.loop_depth)
+    except Exception as e:
+        logger.debug("[command] input 分类事件发布失败: %s", e)
+
     cmd = parser.parse(text, source="command",
                        session_id=data.get("session_id", "default"))
 

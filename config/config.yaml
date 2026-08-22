@@ -182,6 +182,13 @@ collaboration:
     enabled: true
     max_partner_lines: 2
 
+live2d:
+  # 情绪提取（文本→情绪→Live2D 参数链的入口，任务三）
+  # source: auto(模型就绪用模型，否则规则兜底，推荐) | rule(仅规则) | model(仅模型，缺模型降级规则)
+  emotion:
+    source: auto
+    confidence_threshold: 0.0   # 模型置信度低于该值回落规则（0=禁用）
+
 roles:
   - name: yuki
     live2d_model: Hiyori

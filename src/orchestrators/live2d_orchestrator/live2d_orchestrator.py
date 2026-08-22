@@ -60,7 +60,16 @@ class Live2DOrchestrator:
         from src.orchestrators.live2d_orchestrator.parameter_mapper import ParameterMapper
         from src.orchestrators.live2d_orchestrator.timing_controller import TimingController
         self._registry = ParameterRegistry()
-        self._emotion = EmotionExtractor()
+        emotion_source, emotion_threshold = "auto", 0.0
+        try:
+            from src.shared.config_loader import ConfigLoader
+            _cfg = ConfigLoader()
+            emotion_source = _cfg.get("live2d.emotion.source", "auto")
+            emotion_threshold = _cfg.get("live2d.emotion.confidence_threshold", 0.0)
+        except Exception:  # 配置未就绪（如测试环境）回落默认，不阻断
+            pass
+        self._emotion = EmotionExtractor(source=emotion_source,
+                                         confidence_threshold=emotion_threshold)
         self._mapper = ParameterMapper(registry=self._registry)
         self._timing = TimingController()
         registry.bind(self.handle)

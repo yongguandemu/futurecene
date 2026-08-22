@@ -34,8 +34,10 @@ from src.orchestrators.collaboration.coordinator import (
     COLLAB_RUNTIME_FIELDS, coerce_runtime_field,
 )
 from src.web.routes import command as command_route
+from src.web.routes import config as config_route
 from src.web.routes import danmaku as danmaku_route
 from src.web.routes import health as health_route
+from src.web.routes import memory as memory_route
 from src.web.routes import state as state_route
 from src.web.routes import switch as switch_route
 from src.web.routes import worldbook as worldbook_route
@@ -56,6 +58,8 @@ def create_app(context: Optional[Dict] = None) -> Flask:
     app.register_blueprint(switch_route.bp)
     app.register_blueprint(danmaku_route.bp)
     app.register_blueprint(worldbook_route.bp)
+    app.register_blueprint(config_route.bp)   # 任务五：GET/PUT /api/config
+    app.register_blueprint(memory_route.bp)   # 任务五：/api/memory + /api/memory/review
 
     ws_route.init_ws(app, context.get("event_bus"),
                      seq_provider=lambda: context.get("event_bus").current_seq()

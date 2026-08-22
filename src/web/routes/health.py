@@ -7,7 +7,7 @@
 1. 模块身份标识：web.routes · health · GET /api/health
 2. 配置契约：从 current_app.config["APP_CONTEXT"] 取 registry
 3. 输入契约：无请求参数
-4. 输出契约：registry 未装配返回 {"status":"ok"}；装配后附加 {"orchestrators":[名称列表]}
+4. 输出契约：registry 未装配返回 {"status":"ok"}；装配后附加 {"orchestrators":[名称列表]}；context 含 watchdog 时附加 {"watchdog":{name:status}}
 5. 依赖声明：flask（Blueprint/current_app/jsonify）
 6. 错误定义：registry 缺失时降级返回最小健康体（M0 契约）
 7. 生命周期方法：无（Blueprint 路由函数 health()）
@@ -24,5 +24,9 @@ def health():
     registry = context.get("registry")
     if registry is None:
         return jsonify({"status": "ok"})
-    return jsonify({"status": "ok",
-                    "orchestrators": [o.name for o in registry.all()]})
+    payload = {"status": "ok",
+               "orchestrators": [o.name for o in registry.all()]}
+    watchdog = context.get("watchdog")
+    if watchdog is not None:
+        payload["watchdog"] = watchdog.get_status()
+    return jsonify(payload)

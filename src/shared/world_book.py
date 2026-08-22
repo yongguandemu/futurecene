@@ -268,8 +268,13 @@ class WorldBook:
 
     def update_entry(self, entry_id: str, content: str = None,
                      title: str = None, tags: List[str] = None,
+                     metadata: Optional[Dict] = None,
                      reason: str = "") -> bool:
-        """更新条目（记录演化日志，截断 200 条）。"""
+        """更新条目（记录演化日志，截断 200 条）。
+
+        metadata 非空时按键合并（如 {priority_note: true} 标记重要记事，
+        任务五：用户审阅时决定，非自动）。
+        """
         with self._lock:
             entry = self._entries.get(entry_id)
             if entry is None:
@@ -281,6 +286,8 @@ class WorldBook:
                 entry["title"] = title
             if tags is not None:
                 entry["tags"] = tags
+            if metadata:
+                entry["metadata"] = {**(entry.get("metadata") or {}), **metadata}
             entry["updated_at"] = time.time()
             entry["version"] += 1
             self._evolution_log.append({

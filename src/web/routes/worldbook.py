@@ -100,6 +100,7 @@ def update_entry(entry_id):
         content=body.get("content"),
         title=body.get("title"),
         tags=body.get("tags"),
+        metadata=body.get("metadata"),
         reason=body.get("reason", ""))
     if not ok:
         return jsonify({"ok": False, "error": f"条目不存在: {entry_id}"}), 404

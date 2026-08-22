@@ -199,7 +199,8 @@ class LLMOrchestrator:
                 if name != first_name:
                     logger.warning("[LLMOrchestrator] 降级: %s 失败 → %s (engine=%s)",
                                    first_name, name, engine)
-                self._event_bus.publish(LLM_RESPONDED, capability="llm:chat", text=reply)
+                self._event_bus.publish(LLM_RESPONDED, capability="llm:chat", text=reply,
+                                        usage=usage or {}, model=getattr(client, "model", name))
                 return {"ok": True,
                         "data": {"reply": reply, "usage": usage or {}, "latency_ms": latency_ms},
                         "error": None}
@@ -234,7 +235,8 @@ class LLMOrchestrator:
                 if name != first_name:
                     logger.warning("[LLMOrchestrator] 流式降级: %s 失败 → %s (engine=%s)",
                                    first_name, name, engine)
-                self._event_bus.publish(LLM_RESPONDED, capability="llm:stream_chat", text=reply)
+                self._event_bus.publish(LLM_RESPONDED, capability="llm:stream_chat", text=reply,
+                                        usage={}, model=getattr(client, "model", name))
                 return {"ok": True,
                         "data": {"reply": reply, "usage": {}, "latency_ms": latency_ms},
                         "error": None}

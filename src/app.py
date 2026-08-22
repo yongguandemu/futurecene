@@ -128,6 +128,10 @@ def build_app_context():
     session = SessionContext(session_id="default")
     session.bind_event_bus(event_bus)
 
+    # ---------- 用户设置（任务五：设置面板持久化 data/config_user.json） ----------
+    from src.shared.user_config import UserConfigStore
+    user_config = UserConfigStore()
+
     # ---------- 调度官（注册即生成开关 + start） ----------
     config_loader = ConfigLoader()
     p2_music_cfg = config_loader.get("music") or {}
@@ -157,7 +161,9 @@ def build_app_context():
         TTSOrchestrator(event_bus=event_bus, config_loader=config_loader),
         Live2DOrchestrator(event_bus=event_bus),
         BilibiliOrchestrator(event_bus=event_bus, config_loader=config_loader),
-        MemoryOrchestrator(event_bus=event_bus),
+        MemoryOrchestrator(event_bus=event_bus,
+                           switch_check=lambda name: switch_manager.is_enabled(name),
+                           strength_provider=lambda: user_config.get("memory_strength")),
         SafetyOrchestrator(event_bus=event_bus),
         screen_orch,
         game_orch,
@@ -196,6 +202,8 @@ def build_app_context():
     # ---------- 弹幕 → 对话 → TTS → Live2D 全链路（规格书 9.2） ----------
     llm_orch = registry.get("llm")
     tts_orch = registry.get("tts")
+    if tts_orch is not None:
+        tts_orch.start()  # 装配层启动：创建 wusound/cosyvoice 引擎（D3 被动工作，由装配层启动）
     memory_orch = registry.get("memory")
     from src.commander.tool_registry import ToolRegistry
     tool_registry = ToolRegistry()  # LLM 工具注册表（内置世界书查询/系统状态）
@@ -230,6 +238,39 @@ def build_app_context():
         switch_check=lambda name: switch_manager.is_enabled(name))
     pipeline.set_speech_scheduler(speech_scheduler)
 
+    # ---------- 任务四：分层记忆（开关 + LLM 摘要注入） ----------
+    switch_manager.auto_register("memory_compression", default=True)           # 压缩开关（默认开）
+    switch_manager.auto_register("allow_memory_to_worldbook", default=False)   # L3→世界书提案（默认关）
+
+    def _memory_summarize(text: str, max_chars: int) -> str:
+        """记忆压缩摘要：统一 fast 引擎（deepseek-v4-flash，规格书禁用 glm-4.7-flash）。
+
+        全链失败（error 非空，reply 为兜底回复）→ 返回空串，压缩器降级原文分段。
+        """
+        if not text or not text.strip():
+            return ""
+        import asyncio
+        try:
+            result = asyncio.run(llm_orch.handle({"capability": "llm:chat", "payload": {
+                "engine": "fast",
+                "system_prompt": (
+                    f"你是直播记忆压缩器。把输入的事件流水压缩为不超过 {max_chars} 字的中文摘要，"
+                    "保留人物、事件、观众偏好与时间线。只输出摘要正文，不要任何解释。"),
+                "text": text[:6000],
+            }}))
+        except Exception as e:
+            logger.warning("[app] 记忆摘要调用异常，降级原文分段: %s", e)
+            return ""
+        if not result or not result.get("ok") or result.get("error"):
+            return ""  # 全链失败：兜底回复不可当摘要
+        reply = (result.get("data") or {}).get("reply", "")
+        return reply if isinstance(reply, str) else ""
+
+    memory_orch.set_summarize_fn(_memory_summarize)
+    logger.info("[app] 任务四装配完成：memory_compression=%s allow_memory_to_worldbook=%s",
+                switch_manager.is_enabled("memory_compression"),
+                switch_manager.is_enabled("allow_memory_to_worldbook"))
+
     # ---------- 日程触发分发（P0 补迁）：schedule:fired → 指挥官命令分发 ----------
     # 排期到点时 ScheduleOrchestrator 只发事件；此处由装配层订阅并把动作
     # 投递给指挥官，经正常命令分发链（command_router → 调度官 handle）执行。
@@ -249,9 +290,9 @@ def build_app_context():
     logger.info("[app] 已订阅 schedule:fired 排期分发")
 
     # ---------- 本机 TTS 播放（直播测试台 · 无前端浏览器场景） ----------
-    # tts.local_playback=true 时订阅 tts:audio_ready，把合成音频播放到本机扬声器；
-    # 前端（live2d_stream）打开时会与浏览器播放叠加，OBS 正式直播建议关闭该开关。
-    if config_loader.get("tts.local_playback", False):
+    # 输出目标由用户设置 tts_output_target 决定（任务五 5.2，替代单布尔开关）：
+    # local/both → 订阅 tts:audio_ready 播放到本机扬声器；stream → 仅推流不本机播放。
+    if user_config.get("tts_output_target") in ("local", "both"):
         from src.orchestrators.tts_orchestrator.local_player import LocalTTSSpeaker
         local_tts = LocalTTSSpeaker(
             event_bus,
@@ -371,8 +412,28 @@ def build_app_context():
     crash_reporter = CrashReporter()
     crash_reporter.install()
 
+    # 成本记录接线（任务五 5.3：用量监控真实数据）——事件驱动，调度官零改动耦合：
+    # LLM_RESPONDED 带 usage/model → record("llm")；TTS_REQUESTED 带 text → record("tts", chars)
+    from src.shared.events import LLM_RESPONDED, TTS_REQUESTED
+
+    def _on_cost_llm(event, capability="", text="", usage=None, model="", **kw):
+        usage = usage or {}
+        if usage:
+            cost_tracker.record(
+                "llm", provider="openai", model=model or "gpt-4o-mini",
+                prompt_tokens=int(usage.get("prompt_tokens", 0) or 0),
+                completion_tokens=int(usage.get("completion_tokens", 0) or 0))
+
+    def _on_cost_tts(event, text="", **kw):
+        cost_tracker.record("tts", chars=len(text or ""))
+
+    event_bus.subscribe(LLM_RESPONDED, _on_cost_llm, name="CostTracker-LLM")
+    event_bus.subscribe(TTS_REQUESTED, _on_cost_tts, name="CostTracker-TTS")
+    logger.info("[app] 成本记录接线完成：LLM_RESPONDED / TTS_REQUESTED → CostTracker")
+
     def metrics_provider():
-        return {"cost": cost_tracker.snapshot(),
+        return {"cost": {**cost_tracker.snapshot(),
+                         "today": cost_tracker.get_stats("today")},
                 "watchdog": watchdog.get_status(),
                 "circuit_breaker": cost_breaker.snapshot()}
 
@@ -422,6 +483,8 @@ def build_app_context():
         "decision_log": {"recent": recent_entries, "stats": log_stats,
                          "clear": clear_log},
         "world_book": get_world_book(),
+        "user_config": user_config,      # 任务五：设置面板
+        "memory": memory_orch,           # 任务五：记忆库/审阅 API
     }
     return create_app(context), event_bus
 

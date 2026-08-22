@@ -28,6 +28,11 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PASS, FAIL = "PASS", "FAIL"
 _results = []  # (level, name, status, detail)
 
+# 允许降级的调度官（未接入外部服务前的预期状态，不视为失败）：
+# bilibili —— B 站密钥为"延后必填"（config warning: 接入 B站前可忽略），
+#             未配置密钥时该调度官 health 报 degraded 属设计行为。
+IGNORED_DEGRADED = {"bilibili"}
+
 
 def _record(level: str, name: str, ok: bool, detail: str = "") -> bool:
     _results.append((level, name, PASS if ok else FAIL, detail))
@@ -92,7 +97,7 @@ def l1_service(base: str) -> bool:
         ok &= _record("L1", "/api/health 返回 ok", health.get("status") == "ok",
                       f"orchestrators={len(health.get('orchestrators', []))}")
         degraded = [o for o, s in (health.get("watchdog") or {}).items()
-                    if s != "ok"]
+                    if s != "ok" and o not in IGNORED_DEGRADED]
         ok &= _record("L1", "全调度官健康（无 degraded）", not degraded,
                       f"degraded={degraded}" if degraded else "")
     except Exception as e:
@@ -124,13 +129,17 @@ def l2_pipeline(base: str) -> bool:
             _record("L2", "对话延迟阈值（≤15s）", False, f"实际 {ms:.0f}ms")
     except Exception as e:
         ok &= _record("L2", "真实对话", False, str(e))
-    # 2.2 TTS 真实合成：落盘 + 格式（RIFF=WAV / ID3=MP3，禁止伪装）
+    # 2.2 TTS 真实合成：走 /api/danmaku 完整链路（记忆 → LLM → 字幕 → TTS），
+    # 检测"本次调用"新落盘的音频文件（杜绝旧缓存假阳性），验证格式 RIFF/ID3 与后缀一致
     try:
-        r, _ = _http_json(f"{base}/api/command", timeout=90, method="POST",
-                          body={"text": "测试语音合成效果"})
-        # TTS 经指挥官链路异步发布，此处直接探测缓存目录最新文件
-        time.sleep(1.5)
-        latest = _latest_tts_file()
+        before_ts = _latest_tts_mtime()
+        r, _ = _http_json(f"{base}/api/danmaku", timeout=60, method="POST",
+                          body={"content": "主播你好，测试语音合成效果",
+                                "user_name": "冒烟测试"})
+        ok &= _record("L2", "弹幕入口注入", r.get("ok") is True,
+                      f"command_id={r.get('command_id', '')[:8]}")
+        # TTS 经指挥官链路异步合成，轮询等待新文件（最长 15s）
+        latest = _wait_new_tts_file(before_ts, timeout=15)
         if latest:
             head = latest.read_bytes()[:4]
             is_riff = head == b"RIFF"
@@ -143,20 +152,33 @@ def l2_pipeline(base: str) -> bool:
             ok &= _record("L2", "缓存后缀与真实格式一致（修复：MP3 伪装 WAV）",
                           suffix_ok, f"{latest.name}")
         else:
-            ok &= _record("L2", "TTS 缓存目录", False, "无 tts_* 文件")
+            ok &= _record("L2", "TTS 落盘（弹幕链路新文件）", False,
+                          f"15s 内未发现新 tts 文件（before_ts={before_ts})")
     except Exception as e:
         ok &= _record("L2", "TTS 探测", False, str(e))
     return ok
 
 
-def _latest_tts_file():
+def _latest_tts_mtime():
     cache = PROJECT_ROOT / "data" / "cache" / "tts"
     if not cache.exists():
-        return None
+        return 0.0
     files = [f for f in cache.glob("tts_*") if f.is_file()]
-    if not files:
-        return None
-    return max(files, key=lambda f: f.stat().st_mtime)
+    return max((f.stat().st_mtime for f in files), default=0.0)
+
+
+def _wait_new_tts_file(before_ts: float, timeout: float = 15.0):
+    """轮询等待 mtime 严格晚于 before_ts 的新 TTS 文件（防旧缓存假阳性）。"""
+    cache = PROJECT_ROOT / "data" / "cache" / "tts"
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if cache.exists():
+            fresh = [f for f in cache.glob("tts_*")
+                     if f.is_file() and f.stat().st_mtime > before_ts]
+            if fresh:
+                return max(fresh, key=lambda f: f.stat().st_mtime)
+        time.sleep(0.5)
+    return None
 
 
 # ---------- 汇总 ----------

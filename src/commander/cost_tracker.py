@@ -51,8 +51,10 @@ class CostTracker:
         self._by_type: Dict[str, Dict[str, Any]] = {}  # {llm/tts: {cost, calls, tokens}}
         self._total_cost = 0.0
         self._total_calls = 0
+        self._daily: Dict[str, Dict[str, Any]] = {}  # 按日聚合（任务五用量监控）
         self._event_bus = event_bus  # 可选注入，跨整元发布 cost:milestone
-        self._load()
+        if persist:
+            self._load()  # persist=False 为纯内存模式：不读取也不写盘
 
     def record(self, call_type: str, provider: str = "", model: str = "",
                prompt_tokens: int = 0, completion_tokens: int = 0,
@@ -76,6 +78,17 @@ class CostTracker:
             item["tokens"] += prompt_tokens + completion_tokens
             self._total_cost += cost
             self._total_calls += 1
+            # 按日聚合（任务五用量监控：get_stats(period="today")）
+            today = time.strftime("%Y-%m-%d")
+            day = self._daily.setdefault(today, {
+                "by_type": {}, "total_cost": 0.0, "total_calls": 0, "date": today})
+            day_item = day["by_type"].setdefault(
+                call_type, {"cost": 0.0, "calls": 0, "tokens": 0})
+            day_item["cost"] += cost
+            day_item["calls"] += 1
+            day_item["tokens"] += prompt_tokens + completion_tokens
+            day["total_cost"] += cost
+            day["total_calls"] += 1
             # 跨整元里程碑（每累计满 1.00 发布 cost:milestone，触发 state:changed）
             crossed_milestone = int(self._total_cost) > int(self._total_cost - cost)
             if self._persist:
@@ -94,11 +107,34 @@ class CostTracker:
                     "total_cost": self._total_cost,
                     "total_calls": self._total_calls}
 
+    def get_stats(self, period: str = "today") -> Dict[str, Any]:
+        """按日用量统计（任务五 5.3）。
+
+        period：today（当日累计）/ yesterday（昨日）/ YYYY-MM-DD（指定日期）。
+        无记录日期返回空聚合（{by_type:{}, total_cost:0, total_calls:0}）。
+        """
+        if period == "yesterday":
+            key = time.strftime("%Y-%m-%d", time.localtime(time.time() - 86400))
+        elif period == "today":
+            key = time.strftime("%Y-%m-%d")
+        else:
+            key = str(period)
+        with self._lock:
+            day = self._daily.get(key)
+            if day is None:
+                return {"date": key, "by_type": {}, "total_cost": 0.0,
+                        "total_calls": 0}
+            return {"date": key,
+                    "by_type": {k: dict(v) for k, v in day["by_type"].items()},
+                    "total_cost": day["total_cost"],
+                    "total_calls": day["total_calls"]}
+
     def reset(self) -> None:
         with self._lock:
             self._by_type.clear()
             self._total_cost = 0.0
             self._total_calls = 0
+            self._daily.clear()
             if self._persist:
                 self._save()
 
@@ -110,10 +146,13 @@ class CostTracker:
             self._by_type = data.get("by_type", {})
             self._total_cost = data.get("total_cost", 0.0)
             self._total_calls = data.get("total_calls", 0)
+            self._daily = data.get("daily", {})
         except (json.JSONDecodeError, OSError):
             pass
 
     def _save(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(json.dumps(self.snapshot(), ensure_ascii=False, indent=2),
+        payload = dict(self.snapshot())
+        payload["daily"] = self._daily
+        self._path.write_text(json.dumps(payload, ensure_ascii=False, indent=2),
                               encoding="utf-8")

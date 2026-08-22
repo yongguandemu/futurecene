@@ -371,6 +371,62 @@ html, body { height: 100%; overflow: hidden; }
   .scene-grid { grid-template-columns: 1fr; }
   .role-grid { grid-template-columns: 1fr; }
 }
+
+/* ============ 任务五：设置面板 / 用量监控 / 角色配置 / 直播间拖拽 ============ */
+.settings-list .setting-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--border-subtle);
+}
+.settings-list .setting-row:last-child { border-bottom: none; }
+.setting-info .s-name { font-weight: 600; color: var(--ink-bright); }
+.setting-info .s-desc { font-size: 12px; color: var(--ink-muted); margin-top: 2px; }
+.settings-list select, .settings-list input[type="checkbox"] { min-width: 180px; }
+.mt-12 { margin-top: 12px; }
+
+.usage-bar-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; }
+.usage-bar-label { width: 64px; font-size: 13px; color: var(--ink-muted); }
+.usage-bar-track { flex: 1; height: 10px; background: var(--bg-hover); border-radius: var(--radius-full); overflow: hidden; }
+.usage-bar-fill { height: 100%; background: linear-gradient(90deg, var(--accent-icon), var(--accent)); border-radius: var(--radius-full); transition: width 0.4s ease; }
+.usage-bar-val { width: 140px; font-size: 12px; color: var(--ink-muted); text-align: right; }
+
+.char-tabs { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid var(--border-subtle); }
+.char-tab { background: transparent; border: none; padding: 10px 18px; cursor: pointer;
+  color: var(--ink-muted); font-size: 14px; border-bottom: 2px solid transparent; }
+.char-tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+.char-panel { display: none; }
+.char-panel.active { display: block; }
+.wb-item { padding: 12px 0; border-bottom: 1px solid var(--border-subtle); }
+.wb-item:last-child { border-bottom: none; }
+.wb-item .wb-title { display: flex; align-items: center; gap: 8px; font-weight: 600; color: var(--ink-bright); }
+.wb-item .wb-content { font-size: 13px; color: var(--ink-muted); margin-top: 4px; }
+.wb-badge { font-size: 11px; padding: 1px 8px; border-radius: var(--radius-full);
+  background: var(--warning-bg); color: var(--warning); }
+.mem-item { padding: 10px 0; border-bottom: 1px solid var(--border-subtle); }
+.mem-item:last-child { border-bottom: none; }
+.mem-item .mem-meta { font-size: 11px; color: var(--ink-dim); display: flex; gap: 10px; margin-top: 2px; }
+.rev-item { padding: 12px 0; border-bottom: 1px solid var(--border-subtle); }
+.rev-item:last-child { border-bottom: none; }
+.rev-item .rev-status { font-size: 11px; padding: 1px 8px; border-radius: var(--radius-full); }
+.rev-status.pending { background: var(--warning-bg); color: var(--warning); }
+.rev-status.accepted { background: var(--success-bg); color: var(--success); }
+.rev-status.rejected { background: var(--danger-bg); color: var(--danger); }
+
+/* 直播间拖拽布局 */
+.live-stage { position: relative; height: calc(100vh - var(--topbar-height) - 44px); }
+.live-toolbar { position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 10px; z-index: 20;
+  background: var(--bg-overlay); border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full); padding: 4px 12px; }
+.drag-card { position: absolute; width: 240px; z-index: 15;
+  background: var(--bg-overlay); border: 1px solid var(--border);
+  border-radius: var(--radius-card); box-shadow: var(--shadow-md); backdrop-filter: blur(4px); }
+.drag-card .drag-head { padding: 6px 12px; font-size: 12px; font-weight: 600; color: var(--ink-bright);
+  cursor: move; border-bottom: 1px solid var(--border-subtle); user-select: none; }
+.drag-card .drag-body { padding: 8px 12px; font-size: 12px; color: var(--ink);
+  max-height: 140px; overflow-y: auto; }
+.data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.data-table th, .data-table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border-subtle); }
+.data-table th { color: var(--ink-muted); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -407,10 +463,22 @@ html, body { height: 100%; overflow: hidden; }
         <span class="nav-label">事件流</span>
         <span class="live-badge" id="navEventCount" style="display:none">0</span>
       </div>
+      <div class="nav-item" data-page="usage">
+        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 15l4-6 4 3 5-8"/></svg></span>
+        <span class="nav-label">用量监控</span>
+      </div>
       <div class="nav-section">管理</div>
       <div class="nav-item" data-page="schedule">
         <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg></span>
         <span class="nav-label">日程设置</span>
+      </div>
+      <div class="nav-item" data-page="character">
+        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6 8-6s8 2 8 6"/></svg></span>
+        <span class="nav-label">角色配置</span>
+      </div>
+      <div class="nav-item" data-page="settings">
+        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>
+        <span class="nav-label">设置面板</span>
       </div>
       <div class="nav-item" data-page="config">
         <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>
@@ -486,10 +554,26 @@ html, body { height: 100%; overflow: hidden; }
       </div>
     </section>
 
-    <!-- 直播间（iframe 嵌入 live2d_stream；独立 /live2d/ 页面保留供 OBS） -->
+    <!-- 直播间（iframe 复用 live2d_stream 渲染引擎；可拖拽悬浮监视组件，布局存 localStorage） -->
     <section class="view" id="view-live">
-      <div style="height: calc(100vh - var(--topbar-height) - 44px);">
+      <div class="live-stage" id="liveStage">
         <iframe src="/live2d/" width="100%" height="100%" style="border:none;border-radius:var(--radius-card);background:transparent;" title="直播间"></iframe>
+        <div class="live-toolbar">
+          <button class="btn sm" onclick="resetLiveLayout()">重置布局</button>
+          <span class="dim" style="font-size:12px">拖拽悬浮框可调整位置（弹幕/字幕/状态）</span>
+        </div>
+        <div class="drag-card" data-drag="danmaku">
+          <div class="drag-head">弹幕监视</div>
+          <div class="drag-body" id="liveDanmaku"><div class="muted">等待弹幕…</div></div>
+        </div>
+        <div class="drag-card" data-drag="subtitle">
+          <div class="drag-head">字幕监视</div>
+          <div class="drag-body" id="liveSubtitle"><div class="muted">等待字幕…</div></div>
+        </div>
+        <div class="drag-card" data-drag="status">
+          <div class="drag-head">直播状态</div>
+          <div class="drag-body" id="liveStatus"><div class="muted">—</div></div>
+        </div>
       </div>
     </section>
 
@@ -583,6 +667,94 @@ html, body { height: 100%; overflow: hidden; }
       <div class="scene-grid" id="sceneGrid"></div>
     </section>
 
+    <!-- 设置面板（任务五 5.2：4 项运营设置，PUT /api/config） -->
+    <section class="view" id="view-settings">
+      <div class="view-head">
+        <div>
+          <h2>设置面板</h2>
+          <div class="sub">运营可读设置 · 持久化到 data/config_user.json（重启生效由装配层消费）</div>
+        </div>
+      </div>
+      <div class="card" style="max-width:640px">
+        <div class="settings-list" id="settingsList">
+          <div class="muted">加载中…</div>
+        </div>
+        <div class="flex between center mt-12">
+          <span class="dim" id="settingsStatus"></span>
+          <button class="btn primary" onclick="saveSettings()">保存设置</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 用量监控（任务五 5.3：/api/metrics cost 按日聚合） -->
+    <section class="view" id="view-usage">
+      <div class="view-head">
+        <div>
+          <h2>用量监控</h2>
+          <div class="sub">今日成本 / 调用次数 / Token 消耗（CostTracker 按日聚合）</div>
+        </div>
+        <button class="btn sm" onclick="renderUsage()">刷新</button>
+      </div>
+      <div class="kpi-grid">
+        <div class="kpi-card"><div class="kpi-label">今日成本（USD）</div><div class="kpi-value accent" id="usageTodayCost">-</div><div class="kpi-sub">累计 -</div></div>
+        <div class="kpi-card"><div class="kpi-label">今日调用</div><div class="kpi-value" id="usageTodayCalls">-</div><div class="kpi-sub">LLM - / TTS -</div></div>
+        <div class="kpi-card"><div class="kpi-label">今日 Token</div><div class="kpi-value" id="usageTodayTokens">-</div><div class="kpi-sub">输入 + 输出</div></div>
+        <div class="kpi-card"><div class="kpi-label">累计成本（USD）</div><div class="kpi-value" id="usageTotal">-</div><div class="kpi-sub">总调用 - 次</div></div>
+      </div>
+      <div class="section-title">按类型用量（今日）</div>
+      <div class="card"><div class="card-body" id="usageBars"><div class="muted">加载中…</div></div></div>
+      <div class="section-title">成本明细</div>
+      <div class="card"><div class="card-body" id="usageTable"></div></div>
+    </section>
+
+    <!-- 角色配置（任务五 5.4：世界书 + 记忆库 + 审阅流） -->
+    <section class="view" id="view-character">
+      <div class="view-head">
+        <div>
+          <h2>角色配置</h2>
+          <div class="sub">世界书条目 · 分层记忆库 · 世界书改动提案审阅</div>
+        </div>
+      </div>
+      <div class="char-tabs">
+        <button class="char-tab active" data-tab="worldbook" onclick="switchCharTab('worldbook')">世界书</button>
+        <button class="char-tab" data-tab="memory" onclick="switchCharTab('memory')">记忆库</button>
+        <button class="char-tab" data-tab="review" onclick="switchCharTab('review')">提案审阅</button>
+      </div>
+      <div class="char-panel active" id="char-worldbook">
+        <div class="flex between center mb-12">
+          <input type="text" class="input" id="wbFilter" placeholder="按标题/内容/标签筛选…" style="max-width:320px" oninput="renderWorldbook()">
+          <span class="muted" id="wbCount"></span>
+        </div>
+        <div class="card"><div class="card-body" id="worldbookList"><div class="muted">加载中…</div></div></div>
+      </div>
+      <div class="char-panel" id="char-memory">
+        <div class="flex gap-8 mb-12">
+          <input type="text" class="input" id="memQuery" placeholder="检索记忆（留空=最近）…" style="max-width:320px">
+          <select class="select" id="memStrength">
+            <option value="low">记忆强度：低 (k=2)</option>
+            <option value="medium" selected>记忆强度：中 (k=5)</option>
+            <option value="high">记忆强度：高 (k=10)</option>
+            <option value="ultra">记忆强度：超强 (k=15)</option>
+          </select>
+          <button class="btn sm" onclick="recallMemory()">检索</button>
+        </div>
+        <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr)">
+          <div class="kpi-card"><div class="kpi-label">L0 今日日志行</div><div class="kpi-value" id="memL0">-</div></div>
+          <div class="kpi-card"><div class="kpi-label">L1 缓冲条数</div><div class="kpi-value" id="memL1">-</div></div>
+          <div class="kpi-card"><div class="kpi-label">L2 中期摘要</div><div class="kpi-value" id="memL2">-</div></div>
+          <div class="kpi-card"><div class="kpi-label">L3 长期记忆</div><div class="kpi-value" id="memL3">-</div></div>
+        </div>
+        <div class="card" style="margin-top:12px"><div class="card-body" id="memoryList"><div class="muted">输入关键词检索分层记忆…</div></div></div>
+      </div>
+      <div class="char-panel" id="char-review">
+        <div class="flex between center mb-12">
+          <span class="muted" id="reviewCount"></span>
+          <button class="btn sm" onclick="loadReview()">刷新</button>
+        </div>
+        <div class="card"><div class="card-body" id="reviewList"><div class="muted">加载中…</div></div></div>
+      </div>
+    </section>
+
     <!-- 系统状态视图已并入"系统总览"（view-master），见 Task 4 -->
   </main>
 </div>
@@ -642,7 +814,7 @@ html, body { height: 100%; overflow: hidden; }
   });
 
   // ============ 视图切换 ============
-  var PAGE_TITLES = { assistant: "智能助手", live: "直播间", master: "系统总览", orchestrators: "调度官管理", events: "事件流", schedule: "日程设置", config: "配置管理" };
+  var PAGE_TITLES = { assistant: "智能助手", live: "直播间", master: "系统总览", orchestrators: "调度官管理", events: "事件流", schedule: "日程设置", config: "配置管理", usage: "用量监控", character: "角色配置", settings: "设置面板" };
   var navItems = document.querySelectorAll(".nav-item[data-page]");
   navItems.forEach(function (item) {
     item.addEventListener("click", function () {
@@ -652,9 +824,18 @@ html, body { height: 100%; overflow: hidden; }
       document.querySelectorAll(".view").forEach(function (v) { v.classList.remove("active"); });
       document.getElementById("view-" + page).classList.add("active");
       document.getElementById("topbarTitle").textContent = PAGE_TITLES[page];
+      if (typeof initView === 'function') initView(page);
       try { location.hash = page; } catch (e) {}
     });
   });
+
+  // 惰性视图初始化（任务五：settings/usage/character 进入时加载数据，避免首屏无效请求）
+  function initView(page) {
+    if (page === 'settings') loadSettings();
+    else if (page === 'usage') renderUsage();
+    else if (page === 'character') { loadMemoryOverview(); recallMemory(); renderWorldbook(); loadReview(); }
+    else if (page === 'live') initLiveLayout();
+  }
 
   // hash 定位：/dashboard/#assistant 加载时激活对应视图（默认智能助手）
   function initHashRoute() {
@@ -667,6 +848,7 @@ html, body { height: 100%; overflow: hidden; }
       v.classList.toggle("active", v.id === "view-" + page);
     });
     document.getElementById("topbarTitle").textContent = PAGE_TITLES[page];
+    if (typeof initView === 'function') initView(page);
   }
 
   // ============ 智能助手常量与数据（由 assistant 迁入） ============
@@ -1743,6 +1925,252 @@ html, body { height: 100%; overflow: hidden; }
     e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
   });
 
+  // ============ 任务五：设置面板 / 用量监控 / 角色配置 / 直播间拖拽 ============
+  var SETTING_DEFS = [
+    { key: 'memory_strength', name: '记忆强度', type: 'select',
+      options: { low: '低（k=2）', medium: '中（k=5）', high: '高（k=10）', ultra: '超强（k=15）' },
+      desc: '分层检索条数（MemoryRetriever k）与调用频率' },
+    { key: 'tts_output_target', name: '语音输出目标', type: 'select',
+      options: { local: '本机扬声器', stream: '直播间推流', both: '两者' },
+      desc: '替代单布尔开关：local/both 本机播放，stream 仅推流' },
+    { key: 'allow_memory_to_worldbook', name: '记忆写入世界书', type: 'bool',
+      desc: '关=不生成 L3→世界书提案；开=生成提案走人工审阅（非直接写入）' },
+    { key: 'reasoning_intensity', name: '推理强度', type: 'select',
+      options: { power_save: '省电（flash 短回复）', standard: '标准（flash）', enhanced: '增强（pro 长回复）' },
+      desc: '映射 engine + max_tokens + temperature，不碰记忆压缩等后台任务' },
+  ];
+
+  function loadSettings() {
+    var box = $('settingsList');
+    box.innerHTML = '<div class="muted">加载中…</div>';
+    API.get('/api/config').then(function (data) {
+      var settings = data.data.settings;
+      var html = SETTING_DEFS.map(function (def) {
+        var control = '';
+        if (def.type === 'select') {
+          control = '<select data-key="' + def.key + '">' + Object.keys(def.options).map(function (k) {
+            return '<option value="' + k + '"' + (settings[def.key] === k ? ' selected' : '') + '>' + def.options[k] + '</option>';
+          }).join('') + '</select>';
+        } else {
+          control = '<input type="checkbox" data-key="' + def.key + '"' + (settings[def.key] ? ' checked' : '') + '>';
+        }
+        return '<div class="setting-row"><div class="setting-info"><div class="s-name">' + def.name + '</div>' +
+          '<div class="s-desc">' + def.desc + '</div></div>' + control + '</div>';
+      }).join('');
+      box.innerHTML = html;
+      setText('settingsStatus', '');
+    }).catch(function () { box.innerHTML = '<div class="muted">加载失败（/api/config 未装配）</div>'; });
+  }
+
+  function saveSettings() {
+    var body = {};
+    document.querySelectorAll('#settingsList [data-key]').forEach(function (el) {
+      var key = el.getAttribute('data-key');
+      body[key] = el.type === 'checkbox' ? el.checked : el.value;
+    });
+    return fetch('/api/config', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }).then(function (r) { return r.json(); }).then(function (data) {
+      if (data.ok) { setText('settingsStatus', '已保存 ✓'); }
+      else { setText('settingsStatus', '保存失败：' + (data.error || '')); }
+    }).catch(function () { setText('settingsStatus', '保存失败（网络错误）'); });
+  }
+
+  function renderUsage() {
+    API.get('/api/metrics').then(function (data) {
+      var cost = (data.cost || {});
+      var today = cost.today || { by_type: {}, total_cost: 0, total_calls: 0 };
+      var byType = today.by_type || {};
+      var tCalls = 0, tTokens = 0;
+      Object.keys(byType).forEach(function (k) { tCalls += byType[k].calls || 0; tTokens += byType[k].tokens || 0; });
+      setText('usageTodayCost', today.total_cost.toFixed(4));
+      setText('usageTodayCalls', today.total_calls);
+      setText('usageTodayTokens', tTokens);
+      setText('usageTotal', (cost.total_cost || 0).toFixed(4));
+      // 条形图（纯 CSS，按今日 cost 归一化）
+      var keys = Object.keys(byType);
+      var maxCost = Math.max.apply(null, keys.map(function (k) { return byType[k].cost || 0; }).concat([0.0001]));
+      var bars = keys.map(function (k) {
+        var item = byType[k];
+        var pct = Math.round(((item.cost || 0) / maxCost) * 100);
+        return '<div class="usage-bar-row"><span class="usage-bar-label">' + k + '</span>' +
+          '<div class="usage-bar-track"><div class="usage-bar-fill" style="width:' + pct + '%"></div></div>' +
+          '<span class="usage-bar-val">' + item.calls + ' 次 · $' + (item.cost || 0).toFixed(4) + ' · ' + (item.tokens || 0) + ' tok</span></div>';
+      }).join('');
+      $('usageBars').innerHTML = keys.length ? bars : '<div class="muted">今日暂无调用</div>';
+      // 明细表
+      $('usageTable').innerHTML = '<table class="data-table"><thead><tr><th>类型</th><th>调用</th><th>Token</th><th>成本（USD）</th></tr></thead><tbody>' +
+        keys.map(function (k) {
+          return '<tr><td>' + k + '</td><td>' + byType[k].calls + '</td><td>' + (byType[k].tokens || 0) + '</td><td>$' + (byType[k].cost || 0).toFixed(4) + '</td></tr>';
+        }).join('') + '</tbody></table>';
+    }).catch(function () {
+      $('usageBars').innerHTML = '<div class="muted">用量数据加载失败</div>';
+    });
+  }
+
+  function switchCharTab(tab) {
+    document.querySelectorAll('.char-tab').forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-tab') === tab); });
+    document.querySelectorAll('.char-panel').forEach(function (p) { p.classList.toggle('active', p.id === 'char-' + tab); });
+    if (tab === 'worldbook') renderWorldbook();
+    if (tab === 'memory') { loadMemoryOverview(); recallMemory(); }
+    if (tab === 'review') loadReview();
+  }
+
+  function renderWorldbook() {
+    var kw = ($('wbFilter').value || '').trim();
+    API.get('/api/worldbook').then(function (data) {
+      var entries = data.data.entries || [];
+      if (kw) entries = entries.filter(function (e) {
+        return (e.title || '').indexOf(kw) >= 0 || (e.content || '').indexOf(kw) >= 0 || (e.tags || []).join(',').indexOf(kw) >= 0;
+      });
+      setText('wbCount', '共 ' + entries.length + ' 条');
+      $('worldbookList').innerHTML = entries.length ? entries.map(function (e) {
+        var priority = e.metadata && e.metadata.priority_note;
+        return '<div class="wb-item"><div class="wb-title">' + (priority ? '<span class="wb-badge">重要记事</span>' : '') +
+          '<span>' + e.title + '</span><span class="dim" style="font-size:12px">[' + e.category + ']</span></div>' +
+          '<div class="wb-content">' + (e.content || '').slice(0, 120) + '</div>' +
+          '<div class="flex center gap-8" style="margin-top:6px">' +
+          '<button class="btn sm" onclick="markPriorityNote(\'' + e.entry_id + '\',' + (!priority) + ')">' + (priority ? '取消重要' : '标记重要') + '</button></div></div>';
+      }).join('') : '<div class="muted">世界书为空</div>';
+    }).catch(function () { $('worldbookList').innerHTML = '<div class="muted">世界书加载失败</div>'; });
+  }
+
+  function markPriorityNote(entryId, on) {
+    fetch('/api/worldbook/' + entryId, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ metadata: { priority_note: !!on } })
+    }).then(function (r) { return r.json(); }).then(function (data) {
+      if (data.ok) renderWorldbook();
+    });
+  }
+
+  function loadMemoryOverview() {
+    API.get('/api/memory').then(function (data) {
+      var d = data.data || {};
+      setText('memL0', d.l0 ? d.l0.today_lines : '-');
+      setText('memL1', d.l1 ? d.l1.count : '-');
+      setText('memL2', d.l2 ? d.l2.count : '-');
+      setText('memL3', d.l3 ? d.l3.count : '-');
+    }).catch(function () {});
+  }
+
+  function recallMemory() {
+    var query = ($('memQuery').value || '').trim();
+    var strength = $('memStrength').value;
+    API.get('/api/memory/recall?query=' + encodeURIComponent(query) + '&strength=' + strength)
+      .then(function (data) {
+        var memories = (data.data && data.data.memories) || [];
+        var source = (data.data && data.data.source) || {};
+        $('memoryList').innerHTML = memories.length ? memories.map(function (m) {
+          var layer = (m.memory_id || '').charAt(0) === 'e' ? 'L1' : (m.memory_id || '').charAt(0) === 'm' ? 'L2' : 'L3';
+          var time = m.timestamp ? new Date(m.timestamp * 1000).toLocaleTimeString('zh-CN') : '';
+          return '<div class="mem-item"><div>' + m.content + '</div>' +
+            '<div class="mem-meta"><span class="badge ' + layer + '">' + layer + '</span><span>' + (m.event || '') + '</span><span>' + time + '</span></div></div>';
+        }).join('') : '<div class="muted">无检索结果（L1 ' + (source.l1 || 0) + ' · L2 ' + (source.l2 || 0) + ' · L3 ' + (source.l3 || 0) + '）</div>';
+      }).catch(function () { $('memoryList').innerHTML = '<div class="muted">记忆检索失败</div>'; });
+  }
+
+  function loadReview() {
+    API.get('/api/memory/review?status=pending').then(function (data) {
+      var proposals = (data.data && data.data.proposals) || [];
+      setText('reviewCount', '待审阅 ' + proposals.length + ' 条');
+      $('reviewList').innerHTML = proposals.length ? proposals.map(function (p) {
+        return '<div class="rev-item"><div class="flex between center">' +
+          '<div style="flex:1"><div class="s-name">' + p.proposed_content + '</div>' +
+          '<div class="mem-meta"><span>来源 ' + p.source_memory_id + '</span><span>' + (p.reason || '') + '</span><span>' + new Date(p.created_at * 1000).toLocaleString('zh-CN') + '</span></div></div>' +
+          '<div class="flex gap-8"><button class="btn sm" onclick="resolveReview(\'' + p.proposal_id + '\',\'accept\')">接受</button>' +
+          '<button class="btn sm danger" onclick="resolveReview(\'' + p.proposal_id + '\',\'reject\')">驳回</button></div></div></div>';
+      }).join('') : '<div class="muted">暂无待审阅提案（开关 allow_memory_to_worldbook 开启后由记忆审阅生成）</div>';
+    }).catch(function () { $('reviewList').innerHTML = '<div class="muted">审阅列表加载失败</div>'; });
+  }
+
+  function resolveReview(proposalId, action) {
+    fetch('/api/memory/review', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: action, proposal_id: proposalId })
+    }).then(function (r) { return r.json(); }).then(function (data) {
+      if (data.ok) loadReview();
+    });
+  }
+
+  // —— 直播间拖拽布局（localStorage 持久化） ——
+  var LIVE_LAYOUT_KEY = 'fs-live-layout';
+  function initLiveLayout() {
+    var saved = null;
+    try { saved = JSON.parse(localStorage.getItem(LIVE_LAYOUT_KEY) || 'null'); } catch (e) {}
+    var cards = document.querySelectorAll('.drag-card');
+    cards.forEach(function (card) {
+      var name = card.getAttribute('data-drag');
+      if (saved && saved[name]) {
+        card.style.left = saved[name].x + 'px';
+        card.style.top = saved[name].y + 'px';
+      } else {
+        var base = name === 'danmaku' ? 12 : (name === 'subtitle' ? 280 : 548);
+        card.style.left = '12px';
+        card.style.top = (48 + (name === 'danmaku' ? 0 : name === 'subtitle' ? 170 : 340)) + 'px';
+      }
+      var head = card.querySelector('.drag-head');
+      var startX = 0, startY = 0, origX = 0, origY = 0, dragging = false;
+      head.addEventListener('mousedown', function (e) {
+        dragging = true;
+        startX = e.clientX; startY = e.clientY;
+        origX = card.offsetLeft; origY = card.offsetTop;
+        function move(ev) {
+          if (!dragging) return;
+          card.style.left = Math.max(0, origX + ev.clientX - startX) + 'px';
+          card.style.top = Math.max(0, origY + ev.clientY - startY) + 'px';
+        }
+        function up() {
+          dragging = false;
+          document.removeEventListener('mousemove', move);
+          document.removeEventListener('mouseup', up);
+          var layout = {};
+          try { layout = JSON.parse(localStorage.getItem(LIVE_LAYOUT_KEY) || '{}'); } catch (e2) {}
+          layout[name] = { x: card.offsetLeft, y: card.offsetTop };
+          localStorage.setItem(LIVE_LAYOUT_KEY, JSON.stringify(layout));
+        }
+        document.addEventListener('mousemove', move);
+        document.addEventListener('mouseup', up);
+        e.preventDefault();
+      });
+    });
+  }
+
+  function resetLiveLayout() {
+    localStorage.removeItem(LIVE_LAYOUT_KEY);
+    document.querySelectorAll('.drag-card').forEach(function (card, i) {
+      card.style.left = '12px';
+      card.style.top = (48 + i * 170) + 'px';
+    });
+  }
+
+  var _liveDanmakuCount = 0;
+  function updateLiveMonitors(event) {
+    if (!event || !event.type) return;
+    var danmakuBox = $('liveDanmaku'), subtitleBox = $('liveSubtitle'), statusBox = $('liveStatus');
+    if (!danmakuBox && !subtitleBox && !statusBox) return; // 视图未挂载
+    if (event.type === 'danmaku:received' && danmakuBox) {
+      _liveDanmakuCount++;
+      var line = document.createElement('div');
+      line.textContent = '[' + _liveDanmakuCount + '] ' + (event.content || event.raw || '');
+      danmakuBox.appendChild(line);
+      while (danmakuBox.children.length > 8) danmakuBox.removeChild(danmakuBox.firstChild);
+    }
+    if (event.type === 'frontend:subtitle_update' && subtitleBox) {
+      var s = document.createElement('div');
+      s.textContent = (event.text || event.content || '');
+      subtitleBox.appendChild(s);
+      while (subtitleBox.children.length > 4) subtitleBox.removeChild(subtitleBox.firstChild);
+    }
+    if (event.type === 'state:changed' && statusBox) {
+      var st = getState() || {};
+      var session = st.session || {};
+      statusBox.innerHTML = '角色：<b>' + (session.role || '—') + '</b><br>场景：' + (session.scene || '—') +
+        '<br>调度官：' + ((st.orchestrators || []).length) + ' 个<br>开关：' + Object.keys(st.switches || {}).length + ' 项';
+    }
+  }
+
   // —— 时钟 ——
   function updateClock() { setText('topbarClock', fmtTime()); }
 
@@ -1760,6 +2188,7 @@ html, body { height: 100%; overflow: hidden; }
   // ============ 启动（统一初始化：hash 定位 + 对话/日程/配置恢复 + 单一 store 订阅） ============
   initTheme();
   initHashRoute();
+  initLiveLayout();          // 直播监视卡布局（localStorage 恢复，不依赖视图激活）
   renderHistory();            // 从 localStorage 恢复对话
   renderSchedule();
   renderRoles();
@@ -1775,6 +2204,7 @@ html, body { height: 100%; overflow: hidden; }
     if (event.command_id) updateCommandStatus(event);
     appendEventLog(event);
     handleEvent(event);
+    updateLiveMonitors(event);
   });
   setInterval(updateClock, 1000);
 
@@ -1788,6 +2218,18 @@ html, body { height: 100%; overflow: hidden; }
   window.refreshMetrics = refreshMetrics;
   window.showScheduleModal = showScheduleModal;
   window.closeScheduleModal = closeScheduleModal;
+  // 任务五新视图函数（内联 onclick 需全局可见）
+  window.loadSettings = loadSettings;
+  window.saveSettings = saveSettings;
+  window.renderUsage = renderUsage;
+  window.switchCharTab = switchCharTab;
+  window.renderWorldbook = renderWorldbook;
+  window.markPriorityNote = markPriorityNote;
+  window.loadMemoryOverview = loadMemoryOverview;
+  window.recallMemory = recallMemory;
+  window.loadReview = loadReview;
+  window.resolveReview = resolveReview;
+  window.resetLiveLayout = resetLiveLayout;
   window.submitSchedule = submitSchedule;
   window.editSchedule = editSchedule;
   window.removeSchedule = removeSchedule;

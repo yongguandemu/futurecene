@@ -106,9 +106,22 @@ AGENTS.md           本文件
 ## 测试规范
 
 - 所有测试在 `tests/`，pytest，命名 `test_<模块>.py`。
-- **新增/修改功能必须配套测试**，提交前跑全量：`python -m pytest tests -q`（当前 343 个测试必须全绿）。
+- **新增/修改功能必须配套测试**，提交前跑全量：`python -m pytest tests -q`（全量必须全绿，数量随功能增长）。
 - 事件 schema 有独立测试（`test_events_schema.py`）校验唯一性/命名/ALL_EVENTS 一致性，改 events.py 必须同步。
 - 单测风格：顶部 `sys.path.insert` 项目根，纯函数断言，EventBus 单例用 `reset()` 隔离。
+
+### 冒烟测试（新机制，验收前必跑）
+
+单测打桩只能验证逻辑契约，查不出外部依赖/环境/链路问题（如 TTS 格式、密钥缺失、端口占用、真实对话延迟）。验收前跑 `scripts/smoke_test.py`（三层，不打桩）：
+
+- L0 环境探测：Python / imageio_ffmpeg / 4 个密钥 / 端口占用（`--check-env`，无需服务）
+- L1 服务存活：/api/health 全调度官状态、命令接口响应延迟
+- L2 主链路：真实对话延迟（≥15s 警告）、TTS 落盘真实格式（RIFF/ID3）、缓存命名
+
+执行规则：
+- **大型修改**（涉及链路编排 / 外部依赖 / 配置 / 启动脚本）之后：除全量 pytest 外，**必须**在服务运行状态下跑完整冒烟 `python scripts/smoke_test.py`，L0/L1/L2 全过才算完成；环境不允许起服务时至少跑 `python scripts/smoke_test.py --check-env`（L0）。
+- 每次代码改动提交前：跑一次 `python scripts/smoke_test.py --check-env` 确认环境无损。
+- 退出码：全过 0 / 失败 1（CI 已集成 `--check-env` 于 smoke job）。
 
 ## 前端规范
 
@@ -119,11 +132,15 @@ AGENTS.md           本文件
 ## 常用命令
 
 ```powershell
-python -m pytest tests -q          # 全量测试（提交前必须跑）
-python -m pytest tests/test_xxx.py # 单文件
-python src/app.py                  # 启动系统（需先配置 .env）
+python -m pytest tests -q                  # 全量测试（提交前必须跑，全绿）
+python -m pytest tests/test_xxx.py         # 单文件
+python scripts/smoke_test.py --check-env   # 冒烟 L0 环境探测（无需服务）
+python scripts/smoke_test.py               # 完整冒烟 L0/L1/L2（需服务运行）
+python src/app.py                          # 启动系统（需先配置 .env）
 ```
 
 ## 提交规范
 
 Conventional Commits 前缀：`feat` / `fix` / `docs` / `test` / `refactor` / `ops`，中文描述，如 `feat(ops): 决策日志与策略模块（decision_log/decision_policy + 接线 + 文档）`。
+
+**推送门禁（GitHub）**：未经用户确认「工作阶段结束」或明确要求推送，**禁止**执行 `git push`；提交只在本地保留。推送失败时不得无限自动重试轰炸用户，应汇报结果并等待指示。

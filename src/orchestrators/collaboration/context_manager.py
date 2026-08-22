@@ -81,5 +81,8 @@ class ContextManager:
         if awareness_enabled:
             lines = partner_lines if partner_lines is not None else self.partner_lines(role)
             if lines:
-                prompt += "\n\n【感知彼此】对方最近发言：\n" + "\n".join(lines)
+                prompt += ("\n\n【感知彼此】对方最近发言如下（与你同台的主播）。回应观众时"
+                           "自然地与对方发言衔接（接话/回应/吐槽均可），不要无视对方"
+                           "刚说过的话；若对方发言与本轮弹幕无关，正常回应观众即可。\n"
+                           + "\n".join(lines))
         return prompt.strip()

@@ -102,9 +102,18 @@ from src.orchestrators.collaboration.rules import make_rules_by_order  # noqa: E
 DEFAULT_RULES_ORDER = ["mention", "intent", "continuation", "relevance",
                        "balance", "cooldown", "random"]
 _JUDGE_SYSTEM = (
-    "你是直播间双虚拟主播的发言权判断器。根据弹幕/情境判断 Yuki 与 Lilith "
-    "谁更应当说话（或都不说话）。只输出 JSON，不要其它文字："
-    '{"yuki": 0到1的紧迫度, "lilith": 0到1的紧迫度, "silent": true或false}'
+    "你是直播间双虚拟主播（Yuki/Lilith）的发言权判断器。根据弹幕内容与最近话轮，"
+    "判断谁更应当说话（或都不说话）。\n"
+    "判断依据：\n"
+    "- 弹幕点名或明显在与某角色互动 → 该角色紧迫度更高；\n"
+    "- 弹幕内容贴近某角色人设/擅长话题 → 该角色优先；\n"
+    "- 最近话轮中某角色刚说过话 → 适当降低其紧迫度（避免抢话）；\n"
+    "- 弹幕与角色无关、无需回应（如纯表情刷屏）→ silent=true，双紧迫度均低；\n"
+    "- 紧迫度取值 0-1：0=完全无需说话，1=必须立即回应。\n"
+    "只输出 JSON，不要其它文字，格式：\n"
+    '{"yuki": 0到1的紧迫度, "lilith": 0到1的紧迫度, "silent": true或false}\n'
+    "示例（弹幕点名 Yuki）：{\"yuki\": 0.8, \"lilith\": 0.1, \"silent\": false}；"
+    "示例（纯表情刷屏）：{\"yuki\": 0.0, \"lilith\": 0.0, \"silent\": true}"
 )
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 

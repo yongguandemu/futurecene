@@ -9,9 +9,11 @@ from src.orchestrators.live2d_orchestrator.timing_controller import TimingContro
 
 def test_blink_cycle_changes_eye_open():
     t = TimingController(blink_interval=(1.0, 1.0))  # 固定 1s 便于测试
-    values = {t.tick(now=i, speaking=False).get("ParamEyeLOpen", 1.0)
-              for i in range(0, 12, 2)}
-    assert len(values) > 1  # 有开合变化
+    # now=0.04 → phase≈4%（眨眼半闭）；now=0.5 → phase=50%（全开）
+    half = t.tick(now=0.04, speaking=False).get("ParamEyeLOpen")
+    open_ = t.tick(now=0.5, speaking=False).get("ParamEyeLOpen", 1.0)
+    assert half is not None and half < open_  # 有开合变化
+    assert 0.0 <= half <= 1.0 and 0.0 <= open_ <= 1.0
 
 
 def test_speaking_suppresses_motion_switch():

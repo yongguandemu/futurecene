@@ -3,8 +3,12 @@
 能力：safety:check_input / check_output / reload_rules。
 职责边界（5.5）：不决定回复策略，只返回 verdict（allow/block/flag），策略归指挥官。
 
+> ADR-014 退役说明：safety:check_input / safety:check_output 已不在弹幕链路调用
+> （内容安全信任厂商 DeepSeek/智谱，角色边界由世界书人设唯一性维持）。
+> 模块与 reload_rules 能力保留注册，供手动/未来启用。
+
 # 模块内容清单（8 项契约）
-1. 模块身份标识：safety · SafetyOrchestrator · 能力 safety:check_input/check_output/reload_rules
+1. 模块身份标识：safety · SafetyOrchestrator · 能力 safety:check_input/check_output/reload_rules（前两者 ADR-014 退役）
 2. 配置契约：rules_file 规则文件路径、model_dir 模型目录（可选）
 3. 输入契约：handle(command) 指令字典（capability + payload.text）
 4. 输出契约：{ok, data:{verdict, reason}, error}；发布 safety:blocked / safety:flagged 事件

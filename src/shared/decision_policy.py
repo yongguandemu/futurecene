@@ -126,8 +126,8 @@ def _entry(layer: str, outcome: str, reason: str) -> Dict[str, str]:
 # 依据真实能力名（各调度官 registry.py / 模块内容清单），新增能力必须在此登记。
 DECISION_MATRIX: Dict[str, Dict[str, str]] = {
     # ---------- L0 反射：硬规则拦截 ----------
-    "safety:check_input": _entry("L0", "block", "输入安全过滤（脏话/违禁词）"),
-    "safety:check_output": _entry("L0", "block", "输出安全过滤"),
+    # 注：safety:check_input / safety:check_output 已于 ADR-007 退役（信任厂商
+    # 安全系统，内容安全不再做本地硬规则过滤），仅保留规则热加载能力。
     "safety:reload_rules": _entry("L0", "execute", "规则热加载属安全域内部"),
 
     # ---------- L1 域内自治 ----------

@@ -196,13 +196,11 @@ def build_app_context():
     # ---------- 弹幕 → 对话 → TTS → Live2D 全链路（规格书 9.2） ----------
     llm_orch = registry.get("llm")
     tts_orch = registry.get("tts")
-    safety_orch = registry.get("safety")
     memory_orch = registry.get("memory")
     from src.commander.tool_registry import ToolRegistry
     tool_registry = ToolRegistry()  # LLM 工具注册表（内置世界书查询/系统状态）
     pipeline = DanmakuPipeline(event_bus=event_bus, llm_orchestrator=llm_orch,
                                tts_orchestrator=tts_orch,
-                               safety_orchestrator=safety_orch,
                                memory_orchestrator=memory_orch,
                                switch_manager=switch_manager,
                                session=session,

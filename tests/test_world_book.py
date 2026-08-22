@@ -43,15 +43,19 @@ def _sample_entries():
 
 
 def test_load_real_worldbook_migrated():
-    """迁移验证：data/worldbook.json 已落盘且 472 条完整加载。"""
+    """迁移验证：data/worldbook.json 已落盘且 474 条完整加载（472 迁移 + ADR-014 新增 2 条人设唯一性）。"""
     wb = WorldBook(DEFAULT_WORLDBOOK_PATH)
     stats = wb.stats()
-    assert stats["total_entries"] == 472
+    assert stats["total_entries"] == 474
     assert stats["version"] == 2
     # 核心分类齐全
-    assert stats["categories"].get("character", 0) >= 17
+    assert stats["categories"].get("character", 0) >= 19
     assert stats["categories"].get("relationship", 0) >= 6
     assert stats["categories"].get("behavior", 0) >= 5
+    # ADR-014：人设唯一性条目已注入（角色边界由正向设定维持）
+    for role in ("yuki", "lilith"):
+        assert any("人设唯一性" in e["title"] and e["metadata"].get("role") == role
+                   for e in wb.core_entries(role))
 
 
 def test_entries_for_role():

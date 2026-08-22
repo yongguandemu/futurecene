@@ -96,7 +96,7 @@ AGENTS.md           本文件
 
 决策归属四级模型（实现于 `src/shared/decision_policy.py`）：
 
-- L0 反射：硬规则拦截/放行（脏话过滤 `safety:check_input`），零咨询
+- L0 反射：硬规则拦截/放行（开关授权、操作熔断），零咨询
 - L1 域内自治：只影响本域、可逆、低成本，调度官自己拍板（插火把 `experience:*`、切歌 `music:*`、截图 `screen:*`）
 - L2 仲裁上抛：跨域冲突/资源互斥（发言权 `collab:*`），确定性规则链
 - L3 总脑编排：需全局上下文或高风险不可逆（回复弹幕 `llm:chat`、开播/下播 `stream:start/stop`、切换角色 `session:switch`）

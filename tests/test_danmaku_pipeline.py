@@ -1,4 +1,7 @@
-"""test_danmaku_pipeline.py — 弹幕→对话管线（规格书 9.2，指挥官层订阅）"""
+"""test_danmaku_pipeline.py — 弹幕→对话管线（规格书 9.2，指挥官层订阅）
+
+ADR-007：管线不再含输入/输出安全过滤环节（信任厂商安全系统）。
+"""
 from types import SimpleNamespace
 
 from src.commander.danmaku_pipeline import DanmakuPipeline, GIFT_THANK_INTERVAL
@@ -29,16 +32,6 @@ class FakeTTS:
         return {"ok": True, "data": {"audio_id": "audio-1", "duration_ms": 100}, "error": None}
 
 
-class FakeSafety:
-    def __init__(self, verdict="allow"):
-        self.verdict = verdict
-        self.calls = []
-
-    async def handle(self, command):
-        self.calls.append(command)
-        return {"ok": True, "data": {"verdict": self.verdict, "reason": ""}, "error": None}
-
-
 class FakeMemory:
     """记录 memory:retrieve/memory:store 的全部调用 payload。"""
 
@@ -63,12 +56,12 @@ class FakeProfileLoader:
         return SimpleNamespace(system_prompt=sp) if sp else None
 
 
-def _make_pipeline(llm=None, tts=None, session=None, safety=None, memory=None,
+def _make_pipeline(llm=None, tts=None, session=None, memory=None,
                    profile_loader=None, tool_registry=None):
     bus = EventBus()
     bus.reset()
     pipe = DanmakuPipeline(event_bus=bus, llm_orchestrator=llm, tts_orchestrator=tts,
-                           safety_orchestrator=safety, memory_orchestrator=memory,
+                           memory_orchestrator=memory,
                            session=session, profile_loader=profile_loader,
                            tool_registry=tool_registry)
     pipe.start()
@@ -162,17 +155,15 @@ def test_stop_unsubscribes():
 
 
 def test_active_speaker_publishes_subtitle_and_tts():
-    """dialogue:active → 主动发言（字幕 + TTS + 安全过滤 + 记忆 + 发言完成事件）。"""
+    """dialogue:active → 主动发言（字幕 + TTS + 记忆 + 发言完成事件）。"""
     from src.shared.events import ACTIVE_DIALOGUE, SPEECH_COMPLETED
     bus = EventBus()
     bus.reset()
     llm = FakeLLM(reply="主动说话内容")
     tts = FakeTTS()
-    safety = FakeSafety()
     memory = FakeMemory()
     pipe = DanmakuPipeline(event_bus=bus, llm_orchestrator=llm,
-                           tts_orchestrator=tts, safety_orchestrator=safety,
-                           memory_orchestrator=memory)
+                           tts_orchestrator=tts, memory_orchestrator=memory)
     seen = {}
     bus.subscribe(FRONTEND_SUBTITLE_UPDATE, lambda event, **kw: seen.update(kw))
     completed = []
@@ -182,8 +173,6 @@ def test_active_speaker_publishes_subtitle_and_tts():
                 mood="default", role="yuki", timestamp=0.0)
     assert seen.get("text") == "今天播点什么好呢"
     assert tts.calls and tts.calls[0]["capability"] in ("tts:synthesize", "tts:stream_synthesize")
-    # 安全输出过滤已调用
-    assert any(c["capability"] == "safety:check_output" for c in safety.calls)
     # 记忆存储已调用（主动对话只存 assistant 消息）
     store_calls = [c for c in memory.calls if c["capability"] == "memory:store"]
     assert len(store_calls) == 1
@@ -191,24 +180,6 @@ def test_active_speaker_publishes_subtitle_and_tts():
     # 发言完成事件已发布
     assert completed and completed[0]["text"] == "今天播点什么好呢"
     assert completed[0]["role"] == "yuki"
-
-
-def test_active_speaker_blocked_by_safety():
-    """主动发言被安全过滤拦截时不发布字幕/TTS。"""
-    from src.shared.events import ACTIVE_DIALOGUE
-    bus = EventBus()
-    bus.reset()
-    llm = FakeLLM()
-    tts = FakeTTS()
-    safety = FakeSafety(verdict="block")
-    pipe = DanmakuPipeline(event_bus=bus, llm_orchestrator=llm,
-                           tts_orchestrator=tts, safety_orchestrator=safety)
-    seen = {}
-    bus.subscribe(FRONTEND_SUBTITLE_UPDATE, lambda event, **kw: seen.update(kw))
-    pipe.start()
-    bus.publish(ACTIVE_DIALOGUE, text="敏感内容", mood="default", role="yuki")
-    assert seen == {}  # 安全过滤拦截，不发布字幕
-    assert tts.calls == []  # 不调用 TTS
 
 
 def test_execute_with_uses_role_and_publishes_completed():
@@ -228,15 +199,10 @@ def test_execute_with_uses_role_and_publishes_completed():
         async def handle(self, cmd):
             return {"ok": True, "data": {"audio_id": "a1"}}
 
-    class FakeSafety:
-        async def handle(self, cmd):
-            return {"ok": True, "data": {"verdict": "allow"}}
-
     bus = EventBus()
     llm = FakeLLM()
     pipe = DanmakuPipeline(bus, llm_orchestrator=llm,
-                           tts_orchestrator=FakeTTS(),
-                           safety_orchestrator=FakeSafety())
+                           tts_orchestrator=FakeTTS())
     events = []
     # EventBus 订阅回调签名：event 名以 event= 关键字传入，归一化为 type 便于断言
     bus.subscribe("speech:completed",

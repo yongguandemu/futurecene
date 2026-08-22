@@ -1,7 +1,7 @@
 """routes/danmaku.py — POST /api/danmaku（直播测试台 · 模拟弹幕注入）
 
 测试用弹幕入口：前端直播测试台输入 → 发布 danmaku:received → 走完整链路
-（安全过滤 → LLM → 字幕 → TTS → Live2D 口型）。
+（记忆 → LLM → 字幕 → TTS → Live2D 口型）。
 
 # 模块内容清单（8 项契约）
 1. 模块身份标识：web.routes · danmaku · POST /api/danmaku

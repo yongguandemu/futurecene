@@ -29,8 +29,10 @@ def test_hard_rule_hits_l0():
 # ---------- 决策归属矩阵：精确键 ----------
 
 def test_matrix_l0_exact():
-    assert classify_capability("safety:check_input").layer == "L0"
-    assert classify_capability("safety:check_output").outcome == "block"
+    # ADR-007：safety:check_input/check_output 已退役，L0 矩阵仅剩规则热加载
+    v = classify_capability("safety:reload_rules")
+    assert v.layer == "L0"
+    assert v.source == "matrix"
 
 
 def test_matrix_l1_exact():
@@ -129,8 +131,8 @@ def test_user_named_cases():
         "stream:start": "L3",
         "stream:stop": "L3",
         "llm:chat": "L3",
-        # 反射 L0：脏话拦截
-        "safety:check_input": "L0",
+        # 反射 L0：规则热加载
+        "safety:reload_rules": "L0",
     }
     for capability, expected in cases.items():
         assert classify_capability(capability).layer == expected, capability

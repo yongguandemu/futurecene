@@ -1,27 +1,28 @@
 """danmaku_pipeline.py — 弹幕→对话→TTS→Live2D 全链路编排（规格书 9.2）
 
 订阅 danmaku:received，按验收链路顺序编排：
-1. safety:check_input（输入安全，block → 发布 audience:filtered 拦截）
-2. memory:retrieve（记忆上下文注入 history）
-3. llm:chat（对话生成）
-4. safety:check_output（输出安全）
-5. FRONTEND_SUBTITLE_UPDATE（字幕）
-6. tts:synthesize（发布 tts:audio_ready → Live2D 口型同步为表达领域订阅）
-7. memory:store（本次对话入短期记忆）
-8. SPEECH_COMPLETED（发言完成，多角色协作触发接话决策）
+1. memory:retrieve（记忆上下文注入 history）
+2. llm:chat（对话生成，engine=fast 低延迟）
+3. FRONTEND_SUBTITLE_UPDATE（字幕）
+4. tts:synthesize（发布 tts:audio_ready → Live2D 口型同步为表达领域订阅）
+5. memory:store（本次对话入短期记忆）
+6. SPEECH_COMPLETED（发言完成，多角色协作触发接话决策）
+
+安全策略（ADR-007）：不设输入/输出安全过滤环节，内容安全信任厂商
+（DeepSeek/智谱）安全系统；角色边界由世界书「人设唯一性」正向设定维持。
 
 设计纪律：不直接 import 调度官模块（D2），通过注入实例调用 handle（命令调用）；
 所有环节失败只记录日志并跳过（EventBus 不级联，规格书 9.3）。
 
 # 模块内容清单（8 项契约）
 1. 模块身份标识：commander · DanmakuPipeline · 对外 start()/stop()/execute_with()（订阅 danmaku:received）
-2. 配置契约：无独立配置；依赖注入 llm/tts/safety/memory 调度官实例、switch_manager 与 SessionContext（角色实时读取）
+2. 配置契约：无独立配置；依赖注入 llm/tts/memory 调度官实例、switch_manager 与 SessionContext（角色实时读取）
 3. 输入契约：订阅 danmaku:received（content/user_name）；! 前缀系统命令跳过；execute_with(text, role, system_prompt, turn_context, user_name) 参数化入口
-4. 输出契约：发布 FRONTEND_SUBTITLE_UPDATE/AUDIENCE_FILTERED/SPEECH_COMPLETED；调用各调度官 handle（safety/memory/llm/tts）；触发 tts:audio_ready 供 Live2D 订阅；字幕/LLM/TTS/记忆/发言完成事件均携带发言角色（默认取 SessionContext 实时值，未注入回退 yuki）
+4. 输出契约：发布 FRONTEND_SUBTITLE_UPDATE/SPEECH_COMPLETED；调用各调度官 handle（memory/llm/tts）；触发 tts:audio_ready 供 Live2D 订阅；字幕/LLM/TTS/记忆/发言完成事件均携带发言角色（默认取 SessionContext 实时值，未注入回退 yuki）
 5. 依赖声明：asyncio、logging、typing、shared.events、shared.decision_log
 6. 错误定义：各环节失败仅记录日志并跳过（不级联）；LLM 未注入跳过
 7. 生命周期方法：start()/stop()
-8. 领域状态说明：_started 标记、注入的调度官引用（_llm/_tts/_safety/_memory）
+8. 领域状态说明：_started 标记、注入的调度官引用（_llm/_tts/_memory）
 """
 import asyncio
 import logging
@@ -29,11 +30,10 @@ import time
 from typing import Any, Dict, List, Optional
 
 from src.shared.decision_log import (
-    OUTCOME_BLOCKED, OUTCOME_ESCALATED, OUTCOME_NO_ACTION, record_decision,
+    OUTCOME_ESCALATED, OUTCOME_NO_ACTION, record_decision,
 )
 from src.shared.events import (
     ACTIVE_DIALOGUE,
-    AUDIENCE_FILTERED,
     DANMAKU_RECEIVED,
     FRONTEND_SUBTITLE_UPDATE,
     GIFT_RECEIVED,
@@ -57,13 +57,11 @@ class DanmakuPipeline:
     """弹幕对话管线（指挥官层订阅逻辑，P1 全链路版）。"""
 
     def __init__(self, event_bus, llm_orchestrator=None, tts_orchestrator=None,
-                 safety_orchestrator=None, memory_orchestrator=None,
-                 switch_manager=None, session=None, profile_loader=None,
-                 tool_registry=None):
+                 memory_orchestrator=None, switch_manager=None, session=None,
+                 profile_loader=None, tool_registry=None):
         self._event_bus = event_bus
         self._llm = llm_orchestrator
         self._tts = tts_orchestrator
-        self._safety = safety_orchestrator
         self._memory = memory_orchestrator
         self._switch_manager = switch_manager
         self._session = session  # SessionContext（可选注入，角色实时读取）
@@ -206,20 +204,17 @@ class DanmakuPipeline:
             logger.error("[DanmakuPipeline] 主动发言异常: %s", e)
 
     async def _speak_active(self, text: str) -> None:
-        """主动发言：安全过滤 → 字幕 → TTS → 记忆 → 发言完成事件。"""
+        """主动发言：字幕 → TTS → 记忆 → 发言完成事件。"""
         role = self._current_role()
-        # 1. 输出安全过滤
-        if not await self._check_output(text):
-            return
-        # 2. 字幕事件
+        # 1. 字幕事件
         self._event_bus.publish(FRONTEND_SUBTITLE_UPDATE,
                                 text=text, role=role, source="active_dialogue")
-        # 3. TTS 合成
+        # 2. TTS 合成
         synth = await self._synthesize(text, role)
         audio_id = synth.get("audio_id", "") if synth else ""
-        # 4. 入短期记忆（主动对话只存 assistant 消息）
+        # 3. 入短期记忆（主动对话只存 assistant 消息）
         await self._store_active_memory(text, role)
-        # 5. 发言完成事件（多角色协作触发接话决策）
+        # 4. 发言完成事件（多角色协作触发接话决策）
         self._event_bus.publish(SPEECH_COMPLETED, role=role, text=text,
                                 audio_id=audio_id)
 
@@ -228,16 +223,12 @@ class DanmakuPipeline:
     async def _process(self, text: str, role: str, system_prompt: str = "",
                        turn_context=None, user_name: str = "") -> Dict[str, Any]:
         turn_context = turn_context or []
-        # 1. 输入安全过滤
-        if not await self._check_input(text):
-            return {"ok": False, "error": "input-blocked"}
-
-        # 2. 记忆检索 → 上下文注入 history（按发言角色分桶）
+        # 1. 记忆检索 → 上下文注入 history（按发言角色分桶）
         history = await self._retrieve_memory(text, role)
 
-        # 3. LLM 对话（显式 system_prompt 优先，否则沿用 profile_loader 注入）
+        # 2. LLM 对话（显式 system_prompt 优先，否则沿用 profile_loader 注入）
         reply_text = await self._chat(text, history, role, system_prompt, turn_context)
-        # 3.1 工具调用循环（P1：LLM 输出 [[TOOL:name:arg]] → 执行 → 回填 → 再生成）
+        # 2.1 工具调用循环（P1：LLM 输出 [[TOOL:name:arg]] → 执行 → 回填 → 再生成）
         if reply_text and self._tool_registry is not None:
             reply_text = await self._run_tool_loop(
                 reply_text, text, history, role, system_prompt, turn_context)
@@ -249,48 +240,23 @@ class DanmakuPipeline:
                             min_interval=10)
             return {"ok": False, "error": "llm-empty"}
 
-        # 4. 输出安全过滤
-        if not await self._check_output(reply_text):
-            return {"ok": False, "error": "output-blocked"}
-
-        # 5. 字幕事件（前端 subtitle_overlay 消费，携带发言角色）
+        # 3. 字幕事件（前端 subtitle_overlay 消费，携带发言角色）
         self._event_bus.publish(FRONTEND_SUBTITLE_UPDATE,
                                 text=reply_text, role=role,
                                 user_name=user_name)
 
-        # 6. TTS 合成（发布 tts:audio_ready → Live2D 口型，表达领域订阅）
+        # 4. TTS 合成（发布 tts:audio_ready → Live2D 口型，表达领域订阅）
         synth = await self._synthesize(reply_text, role)
         audio_id = synth.get("audio_id", "") if synth else ""
 
-        # 7. 对话入短期记忆（按发言角色分桶）
+        # 5. 对话入短期记忆（按发言角色分桶）
         await self._store_memory(text, reply_text, role)
 
-        # 8. 发言完成事件（多角色协作：触发接话决策，携带 role/text/audio_id）
+        # 6. 发言完成事件（多角色协作：触发接话决策，携带 role/text/audio_id）
         self._event_bus.publish(SPEECH_COMPLETED, role=role, text=reply_text,
                                 audio_id=audio_id)
         return {"ok": True, "data": {"reply": reply_text, "audio_id": audio_id},
                 "error": None}
-
-    async def _check_input(self, text: str) -> bool:
-        if self._safety is None:
-            return True
-        result = await self._safety.handle({
-            "capability": "safety:check_input",
-            "payload": {"text": text, "source": "danmaku"},
-        })
-        verdict = result.get("data", {}).get("verdict", "allow")
-        if verdict != "allow":
-            logger.warning("[DanmakuPipeline] 输入被拦截: %s", result.get("data", {}).get("reason"))
-            self._event_bus.publish(AUDIENCE_FILTERED, content=text,
-                                    reason=result.get("data", {}).get("reason"))
-            record_decision(source="danmaku_pipeline", outcome=OUTCOME_BLOCKED,
-                            reason_code="safety_input_blocked",
-                            layer="L0", capability="safety:check_input",
-                            detail="输入被硬规则拦截: {}".format(
-                                result.get("data", {}).get("reason", "")),
-                            min_interval=10)
-            return False
-        return True
 
     async def _retrieve_memory(self, text: str, role: str = "") -> List[Dict[str, str]]:
         if self._memory is None:
@@ -314,7 +280,7 @@ class DanmakuPipeline:
                     system_prompt: str = "", turn_context=None) -> str:
         try:
             payload = {"text": text, "role": role, "history": history,
-                       "engine": "fast"}  # 弹幕互动走 fast 引擎（GLM-FlashX 优先，成本/延迟双优）
+                       "engine": "fast"}  # 弹幕互动走 fast 引擎（DeepSeek V4 Flash 优先，成本/延迟双优）
             if system_prompt:
                 # 显式传入（多角色协调器构造，含感知彼此等）优先，不叠加 profile_loader 注入
                 payload["system_prompt"] = system_prompt
@@ -361,22 +327,6 @@ class DanmakuPipeline:
         return (current or "").strip()
 
     async def _check_output(self, reply_text: str) -> bool:
-        if self._safety is None:
-            return True
-        result = await self._safety.handle({
-            "capability": "safety:check_output",
-            "payload": {"text": reply_text},
-        })
-        verdict = result.get("data", {}).get("verdict", "allow")
-        if verdict != "allow":
-            logger.warning("[DanmakuPipeline] 输出被拦截，不推送字幕")
-            record_decision(source="danmaku_pipeline", outcome=OUTCOME_BLOCKED,
-                            reason_code="safety_output_blocked",
-                            layer="L0", capability="safety:check_output",
-                            detail="输出被硬规则拦截，不推送字幕: {}".format(
-                                result.get("data", {}).get("reason", "")),
-                            min_interval=10)
-            return False
         return True
 
     async def _synthesize(self, reply_text: str, role: str = "") -> Optional[Dict]:

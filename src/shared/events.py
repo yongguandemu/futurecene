@@ -32,6 +32,11 @@ SPEECH_COMPLETED = "speech:completed"                      # 发言完成（role
 COLLAB_UTTERANCE_REQUESTED = "collab:utterance_requested"  # 联动发言请求（role/kind/reason/ref_text）
 COLLAB_JUDGE = "collab:judge"                                # 仲裁判断完成（urgencies/silent/reason/source/latency，成本可观测）
 
+# ========== 输入分发域（总控调度化） ==========
+INPUT_CLASSIFIED = "input:classified"                 # 输入已分类（type/priority/operator_id/loop_depth）
+INPUT_QUEUED = "input:queued"                         # 输入已入队（priority 模式）
+INPUT_ROUTED = "input:routed"                         # 输入已分发到目标（target/capability/archived）
+
 # ========== 开关域 ==========
 SWITCH_CHANGED = "switch:changed"                     # 开关状态变化
 
@@ -53,6 +58,10 @@ LIVE2D_EXPRESSION_CHANGED = "live2d:expression_changed"  # 表情切换
 LIVE2D_MOTION_TRIGGERED = "live2d:motion_triggered"   # 动作触发
 LIVE2D_LIP_SYNC_START = "live2d:lip_sync_start"       # 口型同步开始
 LIVE2D_LIP_SYNC_END = "live2d:lip_sync_end"           # 口型同步结束
+
+# ========== Live2D 参数驱动域（任务三） ==========
+EMOTION_EXTRACTED = "emotion:extracted"               # 情绪提取完成（emotion/score/role/params）
+LIVE2D_PARAMS_BATCH = "live2d:params_batch"           # 批量参数帧（10Hz 聚合，role/params/ts）
 
 # ========== B站平台域 ==========
 BILIBILI_CONNECTED = "bilibili:connected"             # B站连接建立
@@ -168,6 +177,9 @@ ALL_EVENTS = frozenset({
     SPEECH_COMPLETED,
     COLLAB_UTTERANCE_REQUESTED,
     COLLAB_JUDGE,
+    INPUT_CLASSIFIED,
+    INPUT_QUEUED,
+    INPUT_ROUTED,
     SWITCH_CHANGED,
     LLM_REQUESTED,
     LLM_RESPONDED,
@@ -182,6 +194,8 @@ ALL_EVENTS = frozenset({
     LIVE2D_MOTION_TRIGGERED,
     LIVE2D_LIP_SYNC_START,
     LIVE2D_LIP_SYNC_END,
+    EMOTION_EXTRACTED,
+    LIVE2D_PARAMS_BATCH,
     BILIBILI_CONNECTED,
     BILIBILI_DISCONNECTED,
     DANMAKU_RECEIVED,

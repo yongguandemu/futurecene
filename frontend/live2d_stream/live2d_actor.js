@@ -233,7 +233,42 @@
     } else if (type === "live2d:lip_sync_end") {
       // 权威结束事件（后端按时长触发，带 role/audio_id）：仅当前段结束时收尾
       if (a.lastAudio === ev.audio_id) { clearLipTimer(role); endLipSync(role); }
+    } else if (type === "live2d:params_batch") {
+      // 任务三：批量参数帧（10Hz）→ 触发前端 30fps 插值
+      onParamsBatch(ev.params);
     }
+  }
+
+  // ---- 任务三：live2d:params_batch 参数帧消费 + 30fps 插值 ----
+  // 后端 10Hz 聚合帧 → 前端按 100ms 线性插值到渲染循环，避免参数跳变。
+  var _targetParams = {};   // 最近一帧目标参数
+  var _interpParams = {};   // 插值中的参数
+  var _paramLerp = 1.0;     // 0..1 插值进度（>=1 表示已完成）
+
+  function onParamsBatch(params) {
+    if (!params) return;
+    _targetParams = Object.assign({}, params);
+    _paramLerp = 0.0;
+  }
+
+  function applyInterpolatedParams(dt) {
+    if (_paramLerp >= 1.0) return;
+    _paramLerp = Math.min(1.0, _paramLerp + (dt || 0.016) * 10.0);
+    for (var pid in _targetParams) {
+      var target = _targetParams[pid];
+      var prev = _interpParams[pid] !== undefined ? _interpParams[pid] : target;
+      var value = prev + (target - prev) * _paramLerp;
+      _interpParams[pid] = value;
+      Object.keys(actors).forEach(function (r) {
+        var a = actors[r];
+        if (a && a.model && a.model.internalModel && a.model.internalModel.coreModel) {
+          try {
+            a.model.internalModel.coreModel.setParameterValueById(pid, value);
+          } catch (e) { /* 参数不存在时静默 */ }
+        }
+      });
+    }
+    if (_paramLerp >= 1.0) { _interpParams = Object.assign({}, _targetParams); }
   }
 
   function pushDanmu(user, text, cls) {
@@ -360,6 +395,8 @@
     });
     document.getElementById("canvas-holder").appendChild(app.view);
     window.__app = app;
+    // 任务三：参数帧 30fps 插值挂到 PIXI 渲染循环
+    app.ticker.add(applyInterpolatedParams);
 
     for (var i = 0; i < ROLES.length; i++) {
       var cfg = ROLES[i];

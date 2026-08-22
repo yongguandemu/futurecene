@@ -106,6 +106,38 @@ def test_llm_injects_obs_sources_block():
     assert "live2d.html" in sp and "/subtitle/" in sp and "弹幕显示" in sp
 
 
+def test_assistant_chat_does_not_inject_role_worldbook():
+    """修复：智能助手（无 @角色 定向）不注入任何角色人设/世界书，以中立身份回答。"""
+    router, bus, orch, _ = _make_router()
+    asyncio.run(router.dispatch(Command(capability="llm:chat",
+                                        payload={"text": "帮我查下系统状态"},
+                                        source="command", session_id="s1")))
+    payload = orch.handled[0]["payload"]
+    sp = payload["system_prompt"]
+    # 中立助手身份，无角色人设与世界书
+    assert "直播智能助手" in sp and "不是任何虚拟主播角色" in sp
+    assert "【世界设定】" not in sp
+    assert "你是Yuki" not in sp and "你是Lilith" not in sp
+    # 系统能力说明与 OBS 源仍注入
+    assert "查看系统状态" in sp and "【OBS 直播浏览器源】" in sp
+    # target_role 已消费不残留 payload
+    assert "target_role" not in payload
+
+
+def test_role_target_injects_matching_role_worldbook():
+    """修复：@角色 定向对话注入被定向角色的世界书（lilith 视角，非会话默认 yuki）。"""
+    router, bus, orch, _ = _make_router()
+    asyncio.run(router.dispatch(Command(capability="llm:chat",
+                                        payload={"text": "你好呀", "target_role": "lilith"},
+                                        source="command", session_id="s1")))
+    payload = orch.handled[0]["payload"]
+    sp = payload["system_prompt"]
+    # 定向角色视角说明 + lilith 世界书注入
+    assert "以 lilith" in sp or "莉莉丝（lilith）" in sp
+    assert "【世界设定】" in sp and "莉莉丝" in sp
+    assert "target_role" not in payload
+
+
 def test_unknown_capability():
     router, bus, orch, _ = _make_router()
     result = asyncio.run(router.dispatch(Command(capability="unknown:x",

@@ -52,6 +52,11 @@ def command():
     if isinstance(data.get("history"), list):
         cmd.payload["history"] = data["history"]
 
+    # @角色 定向透传：command_router._inject_llm_context 据此区分「角色视角对话」
+    # （注入对应角色世界书/人设）与「智能助手对话」（中立身份，不注入角色设定）。
+    if target_role:
+        cmd.payload["target_role"] = target_role
+
     # 指挥官内部命令（规格书 4.4）；统一生成 command_id 供前端追踪
     if cmd.capability == "session:switch" and session is not None:
         cid = uuid.uuid4().hex

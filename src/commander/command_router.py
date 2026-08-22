@@ -2,8 +2,9 @@
 
 遍历注册表按能力匹配，无静态映射表：加分 brain 无需修改本文件 — 注册即路由。
 D4 纪律：调用前必须检查开关。
-llm:chat 注入：按当前会话角色注入 system_prompt（角色画像 + 系统能力说明）与对话历史（前端传入），
-保证助手知道自己的身份与系统实际能力（修复：通用回答问题）。
+llm:chat 注入：按身份区分注入 system_prompt（修复：智能助手误走角色世界书）——
+@角色 定向（target_role）→ 注入对应角色人设与世界书；无定向 → 智能助手中立身份
+（系统能力说明 + OBS 源，不注入任何角色设定），并注入对话历史（前端传入）。
 
 # 模块内容清单（8 项契约）
 1. 模块身份标识：commander · CommandRouter · 对外 dispatch(command)
@@ -20,6 +21,7 @@ import uuid
 from typing import Any, Dict, Optional
 
 from src.commander.intent_parser import Command
+from src.commander.session_context import VALID_ROLES
 from src.shared.decision_log import OUTCOME_BLOCKED, OUTCOME_FAILED, record_decision
 from src.shared.events import (
     COMMAND_COMPLETED,
@@ -32,8 +34,7 @@ from src.shared.events import (
 logger = logging.getLogger(__name__)
 
 # 系统能力说明：注入 LLM，使其能回答"怎么使用系统"等真实问题（问题 3 修复）
-_SYSTEM_CAPABILITY_NOTICE = (
-    "你运行在 Future Scene 智能直播系统中，当前人设角色为 {display_name}（{role}）。\n"
+_SYSTEM_CAPABILITIES = (
     "用户可以通过自然语言或「!指令」使用以下真实能力：\n"
     "- 查看系统状态：开关状态、调度官健康、成本统计（如「查看系统状态」）\n"
     "- 切换角色：yuki / lilith（如「切换到 Lilith」）\n"
@@ -42,6 +43,22 @@ _SYSTEM_CAPABILITY_NOTICE = (
     "- OBS 浏览器源：查询/打开直播叠加源（Live2D 模型、弹幕显示、弹幕输入、独立字幕），如「有哪些浏览器源」「打开字幕源」\n"
     "- 自由对话：直接输入任意文本聊天\n"
     "当用户询问如何使用本系统时，请基于以上真实能力回答，不要虚构或给出通用模板回答。"
+)
+
+# 智能助手（系统总控台）中立身份说明：不扮演任何虚拟主播角色，不注入角色世界书
+# （修复：智能助手此前误走 session.role 默认 yuki 的角色人设与世界书）。
+_ASSISTANT_NOTICE = (
+    "你是 Future Scene 智能直播系统的直播智能助手（系统总控台）。"
+    "你不是任何虚拟主播角色，不扮演主播人设，不代入任何角色的世界观，"
+    "始终以直播管理助手的中立身份回答。\n"
+    + _SYSTEM_CAPABILITIES
+)
+
+# 角色定向说明（@角色 定向）：以指定主播角色视角回答，保持人设与世界书设定
+_ROLE_NOTICE = (
+    "你正在以 {display_name}（{role}）的身份与观众互动，"
+    "保持该角色的人设与世界观设定。\n"
+    + _SYSTEM_CAPABILITIES
 )
 
 
@@ -57,13 +74,22 @@ class CommandRouter:
         self._session = session  # SessionContext（可选，llm:chat 注入用）
 
     def _inject_llm_context(self, command: Command) -> None:
-        """llm:chat 注入 system_prompt（角色画像 + 系统能力说明）与历史上下文。"""
+        """llm:chat 注入 system_prompt（身份区分 + 系统能力说明）与历史上下文。
+
+        身份区分（修复：智能助手误走角色世界书）：
+        - payload.target_role（前端 @角色 定向）→ 以指定角色注入人设 + 角色世界书；
+        - 无定向 → 智能助手（系统总控台）中立身份，不注入任何角色世界书/人设。
+        """
         if command.capability != "llm:chat":
             return
-        role = getattr(self._session, "role", "yuki") if self._session else "yuki"
+        # @角色 定向（command.py 透传）：仅接受合法角色；用后即删，payload 保持干净
+        role = (command.payload.get("target_role") or "").strip().lower()
+        command.payload.pop("target_role", None)
+        if role and role not in VALID_ROLES:
+            role = ""
         display_name = role
         role_prompt = ""
-        if self._profile_loader is not None:
+        if role and self._profile_loader is not None:
             try:
                 profile = self._profile_loader.load(role)
                 if profile is not None:
@@ -71,17 +97,21 @@ class CommandRouter:
                     role_prompt = profile.system_prompt or ""
             except Exception as e:
                 logger.warning("[CommandRouter] 角色画像加载失败: %s", e)
-        notice = _SYSTEM_CAPABILITY_NOTICE.format(display_name=display_name, role=role)
-        command.payload["system_prompt"] = (
-            f"{role_prompt}\n\n{notice}" if role_prompt else notice)
-        # 世界书核心设定注入（角色世界观/关系/行为，按 metadata.role 严格区分）
-        try:
-            from src.shared.world_book import get_world_book
-            wb_block = get_world_book().system_prompt_block(role)
-            if wb_block:
-                command.payload["system_prompt"] += "\n\n" + wb_block
-        except Exception as e:
-            logger.debug("[CommandRouter] 世界书注入失败: %s", e)
+        if role:
+            # 角色视角对话：角色人设 + 定向说明 + 角色世界书核心设定
+            notice = _ROLE_NOTICE.format(display_name=display_name, role=role)
+            command.payload["system_prompt"] = (
+                f"{role_prompt}\n\n{notice}" if role_prompt else notice)
+            try:
+                from src.shared.world_book import get_world_book
+                wb_block = get_world_book().system_prompt_block(role)
+                if wb_block:
+                    command.payload["system_prompt"] += "\n\n" + wb_block
+            except Exception as e:
+                logger.debug("[CommandRouter] 世界书注入失败: %s", e)
+        else:
+            # 智能助手：中立身份，不注入角色人设与世界书
+            command.payload["system_prompt"] = _ASSISTANT_NOTICE
         # OBS 直播浏览器源注入（保证 LLM 一定拿到源地址，不受世界书 1500 字符截断影响）
         try:
             from src.orchestrators.stream_orchestrator import obs_sources
@@ -93,7 +123,7 @@ class CommandRouter:
             logger.debug("[CommandRouter] OBS 源注入失败: %s", e)
         # 历史上下文（前端 sendCommand 携带最近对话；_build_messages 组装 system→history→text）
         command.payload.setdefault("history", [])
-        # 引擎路由：web 命令入口为日常对话，走 fast 引擎（GLM-FlashX 优先）
+        # 引擎路由：web 命令入口为日常对话，走 fast 引擎（DeepSeek V4 Flash 优先）
         command.payload["engine"] = "fast"
 
     async def _prepare_live(self, command: Command) -> Dict[str, Any]:

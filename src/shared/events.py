@@ -165,6 +165,9 @@ ACTIVE_DIALOGUE = "dialogue:active"                     # 主动对话生成（�
 # ========== 决策日志域（决策分级） ==========
 DECISION_LOGGED = "decision:logged"                     # 决策日志（outcome/reason_code；no_action 即为何不回应）
 
+# ========== 分层记忆域（任务四） ==========
+MEMORY_EVENT_LOGGED = "memory:event_logged"             # L0 事件落盘完成（event/ts）
+
 # ========== 注册表（实现辅助，供 EventBus 校验） ==========
 # 所有已注册事件名集合。新增事件常量后，此处须同步收录（唯一校验来源）。
 ALL_EVENTS = frozenset({
@@ -263,4 +266,5 @@ ALL_EVENTS = frozenset({
     ACTIVE_DIALOGUE,
     DECISION_LOGGED,
     SCHEDULE_FIRED,
+    MEMORY_EVENT_LOGGED,
 })

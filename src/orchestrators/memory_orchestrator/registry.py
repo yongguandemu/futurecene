@@ -23,6 +23,10 @@ HANDLERS = {
     "memory:retrieve": [object],
     "memory:consolidate": [object],
     "memory:get_history": [object],
+    # 任务四分层记忆新增能力
+    "memory:recall": [object],         # 分层检索 L1/L2/L3（strength 控制 k）
+    "memory:compress": [object],       # 手动触发压缩（L1→L2→L3）
+    "memory:review": [object],         # 世界书改动提案审批流
 }
 
 _repo = CapabilityRegistry(HANDLERS)

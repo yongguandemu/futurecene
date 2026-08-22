@@ -17,6 +17,7 @@ def test_capabilities_from_registry(tmp_path):
     orch, _ = _make(tmp_path)
     assert orch.capabilities() == registry.capabilities() == [
         "memory:store", "memory:retrieve", "memory:consolidate", "memory:get_history",
+        "memory:recall", "memory:compress", "memory:review",
     ]
 
 

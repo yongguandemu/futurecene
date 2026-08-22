@@ -189,6 +189,27 @@ live2d:
     source: auto
     confidence_threshold: 0.0   # 模型置信度低于该值回落规则（0=禁用）
 
+# ---------- 分层记忆（任务四） ----------
+memory:
+  l0_retention_days: 14        # L0 原始事件日志保留天数（2-4 周，到点清理）
+  strength_default: medium     # 默认记忆强度（low/medium/high/ultra，前端可调）
+  l1:
+    window_sec: 600            # L1 循环缓冲时间窗（秒，5-10 分钟）
+    max_entries: 500           # L1 循环缓冲容量
+    max_content_chars: 300     # L1 单条文本化截断字数
+  compression:
+    min_chars: 3000            # L1→L2 压缩触发阈值（累计文本量，规格书 3000-5000 字）
+    max_chars: 5000            # 强制压缩阈值
+    l2_summary_min: 500        # L2 每段摘要目标字数下限
+    l2_summary_max: 1000       # L2 每段摘要目标字数上限
+    l3_entry_max: 300          # L2→L3 归档后每段字数上限（规格书 100-300 字）
+    model: deepseek-v4-flash   # 压缩模型（统一 fast 引擎；禁用 glm-4.7-flash）
+  strength:
+    low: 2
+    medium: 5
+    high: 10
+    ultra: 15
+
 roles:
   - name: yuki
     live2d_model: Hiyori

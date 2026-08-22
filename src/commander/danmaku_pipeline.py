@@ -38,6 +38,7 @@ from src.shared.events import (
     FRONTEND_SUBTITLE_UPDATE,
     GIFT_RECEIVED,
     SPEECH_COMPLETED,
+    SPEECH_SCHEDULED,
 )
 from src.shared.world_book import get_world_book
 from src.commander.tool_registry import TOOL_CALL_RE
@@ -69,6 +70,11 @@ class DanmakuPipeline:
         self._tool_registry = tool_registry  # LLM 工具注册表（可选注入，默认空）
         self._started = False
         self._last_gift_at = 0.0  # 礼物感谢节流时间戳
+        self._scheduler = None  # SpeechScheduler（任务二：speech:scheduled 播放前合成 + complete）
+
+    def set_speech_scheduler(self, scheduler) -> None:
+        """注入 SpeechScheduler：speech:scheduled 播放完成后回执 complete(uid)。"""
+        self._scheduler = scheduler
 
     def start(self) -> None:
         if self._started:
@@ -76,14 +82,16 @@ class DanmakuPipeline:
         self._event_bus.subscribe(DANMAKU_RECEIVED, self._on_danmaku)
         self._event_bus.subscribe(GIFT_RECEIVED, self._on_gift)
         self._event_bus.subscribe(ACTIVE_DIALOGUE, self._on_active_dialogue)
+        self._event_bus.subscribe(SPEECH_SCHEDULED, self._on_speech_scheduled)
         self._started = True
-        logger.info("[DanmakuPipeline] 已订阅 danmaku:received / gift:received / dialogue:active")
+        logger.info("[DanmakuPipeline] 已订阅 danmaku:received / gift:received / dialogue:active / speech:scheduled")
 
     def stop(self) -> None:
         if self._started:
             self._event_bus.unsubscribe(DANMAKU_RECEIVED, self._on_danmaku)
             self._event_bus.unsubscribe(GIFT_RECEIVED, self._on_gift)
             self._event_bus.unsubscribe(ACTIVE_DIALOGUE, self._on_active_dialogue)
+            self._event_bus.unsubscribe(SPEECH_SCHEDULED, self._on_speech_scheduled)
             self._started = False
 
     async def execute_with(self, text: str, role: str, system_prompt: str = "",
@@ -217,6 +225,38 @@ class DanmakuPipeline:
         # 4. 发言完成事件（多角色协作触发接话决策）
         self._event_bus.publish(SPEECH_COMPLETED, role=role, text=text,
                                 audio_id=audio_id)
+
+    def _on_speech_scheduled(self, event: str, text: str = "", mood: str = "default",
+                             role: str = "yuki", uid: str = "", **kwargs) -> None:
+        """SpeechScheduler 排期发言（播放前合成，QA Q3）：字幕 → TTS → 完成回执。"""
+        text = (text or "").strip()
+        if not text:
+            if uid:
+                self._complete_speech(uid)
+            return
+        try:
+            asyncio.run(self._speak_scheduled(text, role, uid))
+        except Exception as e:
+            logger.error("[DanmakuPipeline] 排期发言异常: %s", e)
+            self._complete_speech(uid)
+
+    async def _speak_scheduled(self, text: str, role: str, uid: str = "") -> None:
+        """排期发言：字幕 → TTS（播放前合成）→ 完成事件 → scheduler 回执。"""
+        self._event_bus.publish(FRONTEND_SUBTITLE_UPDATE,
+                                text=text, role=role, source="speech_scheduler")
+        synth = await self._synthesize(text, role)
+        audio_id = synth.get("audio_id", "") if synth else ""
+        await self._store_active_memory(text, role)
+        self._event_bus.publish(SPEECH_COMPLETED, role=role, text=text,
+                                audio_id=audio_id)
+        self._complete_speech(uid)
+
+    def _complete_speech(self, uid: str) -> None:
+        if uid and self._scheduler is not None:
+            try:
+                self._scheduler.complete(uid)
+            except Exception as e:
+                logger.warning("[DanmakuPipeline] 发言完成回执失败 %s: %s", uid, e)
 
     # ---------- 全链路编排（规格书 9.2） ----------
 

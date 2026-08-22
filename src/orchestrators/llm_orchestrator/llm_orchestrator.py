@@ -129,6 +129,8 @@ class LLMOrchestrator:
             return self._stream_chat(payload)
         if capability == "llm:active_dialogue":
             return self._active_dialogue(payload)
+        if capability == "llm:batch_plan":
+            return self._batch_plan(payload)
         return {"ok": False, "data": {}, "error": f"unknown capability: {capability}"}
 
     def health(self) -> Dict[str, Any]:
@@ -280,3 +282,26 @@ class LLMOrchestrator:
         result = self._active.tick()
         return {"ok": True, "data": {"triggered": bool(result), "result": result},
                 "error": None}
+
+    def _batch_chat(self, messages: List[Dict[str, str]]):
+        """BatchPlanner 的 LLM 通道：fast 引擎（DeepSeek V4 Flash）优先，zhipu 兜底。"""
+        chain = self._engine_chain(ROUTE_FAST)
+        last_err: Optional[Exception] = None
+        for client, _name in chain:
+            if client is None:
+                continue
+            try:
+                return client.chat(messages)
+            except Exception as e:
+                last_err = e
+        raise RuntimeError(f"batch chat all engines failed: {last_err}")
+
+    def _batch_plan(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """批量发言计划能力：llm:batch_plan {context, role, topics, count}。"""
+        plans = self._planner.generate(
+            context=payload.get("context", ""),
+            role=payload.get("role", ""),
+            topics=payload.get("topics") or [],
+            count=int(payload.get("count", 3)),
+        )
+        return {"ok": True, "data": {"plans": plans, "count": len(plans)}, "error": None}

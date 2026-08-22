@@ -24,7 +24,7 @@ import threading
 import time
 from typing import Any, Callable, Dict, Optional
 
-from src.shared.events import ACTIVE_DIALOGUE
+from src.shared.events import ACTIVE_DIALOGUE, SPEECH_BATCH_READY
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +67,8 @@ class ActiveDialogue:
         self._active_count = 0
         self._last_result: Optional[Dict[str, str]] = None
         self._danmaku_subscribed = False
+        self._batch_planner: Optional[Any] = None   # BatchPlanner（任务二批量路径）
+        self._switch_check: Optional[Callable[[str], bool]] = None
         logger.info("[ActiveDialogue] 初始化完成 (enabled=%s)", self.enabled)
 
     # ---------- 接入 ----------
@@ -90,6 +92,14 @@ class ActiveDialogue:
 
     def set_event_bus(self, event_bus):
         self._bus = event_bus
+
+    def set_batch_planner(self, planner: Any) -> None:
+        """注入 BatchPlanner（任务二）：batch_mode 开时 tick 走批量生成路径。"""
+        self._batch_planner = planner
+
+    def set_switch_check(self, fn: Callable[[str], bool]) -> None:
+        """注入开关查询（fn(name)->bool），batch_mode 由外部开关控制。"""
+        self._switch_check = fn
 
     # ---------- 生命周期 ----------
 
@@ -140,6 +150,8 @@ class ActiveDialogue:
         silent = now - self._last_user_activity
         if silent < self.max_silence and random.random() > self.trigger_probability:
             return None
+        if self._batch_mode_on() and self._batch_planner is not None:
+            return self._generate_batch(role)
         result = self._generate(role)
         if not result or not result.get("text"):
             return None
@@ -185,6 +197,34 @@ class ActiveDialogue:
                 self.tick(role=role)
             except Exception as e:
                 logger.error("[ActiveDialogue] tick 异常: %s", e)
+
+    def _batch_mode_on(self) -> bool:
+        try:
+            return bool(self._switch_check("batch_mode")) if self._switch_check else False
+        except Exception:
+            return False
+
+    def _generate_batch(self, role: str = "") -> Optional[Dict[str, Any]]:
+        """批量路径：BatchPlanner 生成发言计划 → 发布 speech:batch_ready（供 SpeechScheduler 入队）。"""
+        try:
+            context = self._last_result.get("text", "") if self._last_result else ""
+            topics = [t["text"] for t in DEFAULT_TOPICS]
+            plans = self._batch_planner.generate(context=context, role=role,
+                                                 topics=topics, count=3)
+            if not plans:
+                return None
+        except Exception as e:
+            logger.warning("[ActiveDialogue] 批量生成失败，回退单条: %s", e)
+            result = self._generate(role)
+            return result if result and result.get("text") else None
+        self._last_active_time = time.time()
+        self._active_count += 1
+        self._publish(SPEECH_BATCH_READY, plans=plans, role=role,
+                      source="active_dialogue", count=len(plans),
+                      timestamp=time.time())
+        logger.info("[ActiveDialogue] 批量计划 #%d 共 %d 条 role=%s",
+                    self._active_count, len(plans), role or "default")
+        return {"batch": plans}
 
     def _generate(self, role: str = "") -> Optional[Dict[str, str]]:
         """生成主动话题：role 非空优先 role_generator(role)，否则 generator()，最后话题池。"""

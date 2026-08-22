@@ -221,6 +221,15 @@ def build_app_context():
     # 总控分发模式开关：默认关（direct 直通，现有链路不变）；开 = priority 排队
     switch_manager.auto_register("input_dispatch", default=False)
 
+    # ---------- 任务二：发言时间线调度（SpeechScheduler + 批量发言计划开关） ----------
+    from src.commander.speech_scheduler import SpeechScheduler
+    switch_manager.auto_register("batch_mode", default=False)      # 主动批预生成（默认关，保持现有单条行为）
+    switch_manager.auto_register("real_time_mode", default=True)   # 被动发言实时插入（默认开）
+    speech_scheduler = SpeechScheduler(
+        event_bus=event_bus,
+        switch_check=lambda name: switch_manager.is_enabled(name))
+    pipeline.set_speech_scheduler(speech_scheduler)
+
     # ---------- 日程触发分发（P0 补迁）：schedule:fired → 指挥官命令分发 ----------
     # 排期到点时 ScheduleOrchestrator 只发事件；此处由装配层订阅并把动作
     # 投递给指挥官，经正常命令分发链（command_router → 调度官 handle）执行。
@@ -259,6 +268,7 @@ def build_app_context():
     if active_dialogue is not None:
         active_dialogue.set_event_bus(event_bus)
         active_dialogue.set_role_provider(lambda: session.role)
+        active_dialogue.set_switch_check(lambda name: switch_manager.is_enabled(name))
         llm_ad_cfg = (config_loader.get("llm") or {}).get("active_dialogue", {}) or {}
         if llm_ad_cfg.get("enabled"):
             active_dialogue.start()

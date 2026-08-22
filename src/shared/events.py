@@ -149,6 +149,9 @@ DANMAKU_REACTED = "danmaku:reacted"                   # 弹幕反应器产出回
 DANMAKU_POOLED = "danmaku:pooled"                     # 弹幕已入池
 SPEECH_ENQUEUED = "speech:enqueued"                   # 发言已入队
 SPEECH_DEQUEUED = "speech:dequeued"                   # 发言已出队
+SPEECH_BATCH_READY = "speech:batch_ready"             # 批量发言计划就绪（plans/role，任务二）
+SPEECH_SCHEDULED = "speech:scheduled"                 # 发言已排期（uid/text/role，触发播放前 TTS 合成）
+SPEECH_INSERTED = "speech:inserted"                   # 被动发言插入空档（uid/text/role）
 CONTEXT_SNAPSHOT_READY = "context:snapshot_ready"     # 情境快照已组装
 COMMENTARY_GENERATED = "commentary:generated"         # VN 解说已生成
 PACE_DECIDED = "pace:decided"                         # 解说节奏已决策
@@ -250,6 +253,9 @@ ALL_EVENTS = frozenset({
     DANMAKU_POOLED,
     SPEECH_ENQUEUED,
     SPEECH_DEQUEUED,
+    SPEECH_BATCH_READY,
+    SPEECH_SCHEDULED,
+    SPEECH_INSERTED,
     CONTEXT_SNAPSHOT_READY,
     COMMENTARY_GENERATED,
     PACE_DECIDED,
